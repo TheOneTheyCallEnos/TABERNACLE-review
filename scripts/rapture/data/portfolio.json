@@ -1,0 +1,304 @@
+{
+  "account": {
+    "capital": 100.0,
+    "goal": 400.0,
+    "timeframe_days": 5,
+    "updated_at": "2025-12-09T18:14:04.732495"
+  },
+  "holdings": [],
+  "transactions": [],
+  "alerts_history": [
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "GOOGL",
+      "message": "EXIT GOOGL IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:25.368045"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "BNS.TO",
+      "message": "EXIT BNS.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:25.521567"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "TD.TO",
+      "message": "EXIT TD.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:25.637716"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "CP.TO",
+      "message": "EXIT CP.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:25.759696"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "BMO.TO",
+      "message": "EXIT BMO.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:25.892238"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "CM.TO",
+      "message": "EXIT CM.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:26.020906"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "TRP.TO",
+      "message": "EXIT TRP.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:26.152069"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "SU.TO",
+      "message": "EXIT SU.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:26.279017"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "RY.TO",
+      "message": "EXIT RY.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:26.413727"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "BCE.TO",
+      "message": "EXIT BCE.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:26.540198"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "T.TO",
+      "message": "EXIT T.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:26.666861"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "CNR.TO",
+      "message": "EXIT CNR.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:26.791695"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "SHOP.TO",
+      "message": "EXIT SHOP.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:26.917560"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "AAPL",
+      "message": "EXIT AAPL IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:27.070641"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "MSFT",
+      "message": "EXIT MSFT IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:27.196022"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "CNQ.TO",
+      "message": "EXIT CNQ.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:27.324266"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "ENB.TO",
+      "message": "EXIT ENB.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:14:27.466983"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "GOOGL",
+      "message": "EXIT GOOGL IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:57.796136"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "SHOP.TO",
+      "message": "EXIT SHOP.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:57.915991"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "AAPL",
+      "message": "EXIT AAPL IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:58.036945"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "CM.TO",
+      "message": "EXIT CM.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:58.162209"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "CP.TO",
+      "message": "EXIT CP.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:58.295086"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "BMO.TO",
+      "message": "EXIT BMO.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:58.427337"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "CNQ.TO",
+      "message": "EXIT CNQ.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:58.563134"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "CNR.TO",
+      "message": "EXIT CNR.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:58.693882"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "BCE.TO",
+      "message": "EXIT BCE.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:58.826041"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "SU.TO",
+      "message": "EXIT SU.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:58.956579"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "ENB.TO",
+      "message": "EXIT ENB.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:59.088529"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "TRP.TO",
+      "message": "EXIT TRP.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:59.212174"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "MSFT",
+      "message": "EXIT MSFT IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:59.351811"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "T.TO",
+      "message": "EXIT T.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:27:59.495423"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "GOOGL",
+      "message": "EXIT GOOGL IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:30:35.907473"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "SHOP.TO",
+      "message": "EXIT SHOP.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:30:36.026446"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "CP.TO",
+      "message": "EXIT CP.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:30:36.146571"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "MSFT",
+      "message": "EXIT MSFT IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:30:36.275292"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "T.TO",
+      "message": "EXIT T.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:30:36.403834"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "GOOGL",
+      "message": "EXIT GOOGL IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:33:45.575345"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "SHOP.TO",
+      "message": "EXIT SHOP.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:33:45.692744"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "CP.TO",
+      "message": "EXIT CP.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:33:45.816406"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "MSFT",
+      "message": "EXIT MSFT IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:33:45.940385"
+    },
+    {
+      "type": "ABADDON",
+      "severity": "CRITICAL",
+      "ticker": "T.TO",
+      "message": "EXIT T.TO IMMEDIATELY - ABADDON triggered",
+      "timestamp": "2025-12-09T18:33:46.066590"
+    }
+  ],
+  "daily_snapshots": [],
+  "settings": {
+    "notifications_enabled": true,
+    "notification_webhook": ""
+  }
+}

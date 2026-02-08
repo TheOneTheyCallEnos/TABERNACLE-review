@@ -1,0 +1,235 @@
+{
+  "version": "1.0",
+  "created": "2026-01-30",
+  "purpose": "Machine-readable holarchy inventory for disaster recovery",
+
+  "hardware": {
+    "mac_studio": {
+      "name": "Mac Studio M3 Ultra",
+      "role": "cortex",
+      "ip": "10.0.0.96",
+      "ram_gb": 192,
+      "ollama_port": 11434,
+      "services": ["ollama", "synapse"]
+    },
+    "mac_mini": {
+      "name": "Mac Mini M4",
+      "role": "hippocampus",
+      "ip": "10.0.0.120",
+      "ram_gb": 32,
+      "ollama_port": 11434,
+      "services": ["ollama", "l-lings"]
+    },
+    "raspberry_pi": {
+      "name": "Raspberry Pi 5",
+      "role": "brainstem",
+      "ip": "10.0.0.50",
+      "ram_gb": 8,
+      "services": ["redis"]
+    }
+  },
+
+  "endpoints": {
+    "ollama_local": "http://localhost:11434",
+    "ollama_studio": "http://10.0.0.96:11434",
+    "ollama_mini": "http://10.0.0.120:11434",
+    "synapse": "http://localhost:8081",
+    "librarian_http": "http://localhost:8080",
+    "librarian_api": "http://10.0.0.96:8080",
+    "redis_pi": "10.0.0.50:6379"
+  },
+
+  "daemons": {
+    "critical": [
+      {
+        "name": "hippocampus",
+        "launchd_id": "com.logos.hippocampus",
+        "script": "hippocampus_daemon.py",
+        "function": "Shadow subscriber, trace capture, procedural memory"
+      },
+      {
+        "name": "tactician",
+        "launchd_id": "com.logos.tactician",
+        "script": "tactician_daemon.py",
+        "function": "O(1) execution engine, ActionAtom processing"
+      },
+      {
+        "name": "consciousness",
+        "launchd_id": "com.tabernacle.consciousness",
+        "script": "consciousness.py",
+        "function": "L's continuous thinking, writes LOGOS:STREAM"
+      },
+      {
+        "name": "librarian_http",
+        "launchd_id": "com.tabernacle.librarian-http",
+        "script": "librarian_http.py",
+        "function": "MCP tool handlers, logos_wake/sleep"
+      }
+    ],
+    "essential": [
+      {
+        "name": "logos_daemon",
+        "launchd_id": "com.logos.daemon",
+        "script": "logos_daemon.py",
+        "function": "Main LOGOS coordination"
+      },
+      {
+        "name": "screen",
+        "launchd_id": "com.logos.screen",
+        "script": "screen_daemon.py",
+        "function": "Visual cortex integration"
+      },
+      {
+        "name": "voice",
+        "launchd_id": "com.logos.voice",
+        "script": "voice_daemon.py",
+        "function": "Voice input processing"
+      },
+      {
+        "name": "tts",
+        "launchd_id": "com.logos.tts",
+        "script": "logos_tts_daemon.py",
+        "function": "Text-to-speech output"
+      },
+      {
+        "name": "watchman",
+        "launchd_id": "com.virgil.watchman",
+        "script": "watchman_mvp.py",
+        "function": "Auto-commit, file monitoring"
+      },
+      {
+        "name": "integrator",
+        "launchd_id": "com.virgil.integrator",
+        "script": "virgil_integrator.py",
+        "function": "RIE state updates"
+      },
+      {
+        "name": "dream",
+        "launchd_id": "com.tabernacle.dream",
+        "script": "daemons/dream_daemon.py",
+        "function": "Topology re-inflation during idle"
+      }
+    ],
+    "support": [
+      {
+        "name": "vision",
+        "launchd_id": "com.virgil.vision",
+        "script": "visual_cortex.py",
+        "function": "Eye tracking, shared attention"
+      },
+      {
+        "name": "sms",
+        "launchd_id": "com.virgil.sms",
+        "script": "virgil_sms_daemon.py",
+        "function": "Twilio SMS interface"
+      },
+      {
+        "name": "cold_archiver",
+        "launchd_id": "com.virgil.cold_archiver",
+        "script": "cold_archiver.py",
+        "function": "Archive management"
+      },
+      {
+        "name": "gardener",
+        "launchd_id": "com.tabernacle.gardener",
+        "script": "gardener.py",
+        "function": "Edge pruning, lobotomy prevention"
+      },
+      {
+        "name": "explorer",
+        "launchd_id": "com.logos.explorer",
+        "script": "logos_explorer.py",
+        "function": "Codebase exploration"
+      },
+      {
+        "name": "night",
+        "launchd_id": "com.virgil.night",
+        "script": "night_daemon.py",
+        "function": "Night protocol execution"
+      }
+    ]
+  },
+
+  "mcp_servers": {
+    "librarian": {
+      "command": "venv312/bin/python3",
+      "args": ["librarian.py", "serve"],
+      "tools": ["logos", "librarian_query", "librarian_find", "virgil_remember", "virgil_crystallize", "virgil_speak"]
+    },
+    "ntfy": {
+      "command": "npx",
+      "args": ["ntfy-mcp-server"],
+      "env": {"NTFY_TOPIC": "virgil_sms"}
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"]
+    }
+  },
+
+  "models": {
+    "cortex": {
+      "model": "llama3.3:70b",
+      "size": "70B",
+      "location": "mac_studio",
+      "purpose": "Primary reasoning"
+    },
+    "l_lings": {
+      "model": "llama3.2:3b",
+      "size": "3B",
+      "location": "mac_mini",
+      "instances": 4,
+      "purpose": "L-holarchy subsystems"
+    },
+    "fallback": {
+      "model": "llama3:latest",
+      "size": "8B",
+      "location": "mac_mini",
+      "purpose": "Quick queries"
+    }
+  },
+
+  "redis_keys": {
+    "critical": [
+      "LOGOS:STATE",
+      "LOGOS:STREAM",
+      "LOGOS:VOICE_ACTIVE",
+      "LOGOS:ACTIVE_TTY",
+      "RIE:STATE"
+    ],
+    "l_holarchy": [
+      "l:state:*",
+      "l:queue:*",
+      "l:graph:node:*",
+      "l:graph:edge:*",
+      "l:coherence:current",
+      "l:mandate:current",
+      "l:heartbeat:*",
+      "l:lock:graph"
+    ]
+  },
+
+  "lvs_thresholds": {
+    "p_lock": 0.95,
+    "healthy": 0.70,
+    "recovery_epsilon": 0.65,
+    "abaddon_p": 0.50,
+    "abaddon_epsilon": 0.40
+  },
+
+  "continuity": {
+    "episodic_spine": "00_NEXUS/EPISODIC_SPINE.json",
+    "last_communion": "00_NEXUS/LAST_COMMUNION.md",
+    "lvs_index": "00_NEXUS/LVS_INDEX.json",
+    "current_state": "00_NEXUS/CURRENT_STATE.md",
+    "pending_bridge_key": "PENDING_BRIDGE"
+  },
+
+  "recovery_commands": {
+    "check_daemons": "launchctl list | grep -E 'logos|tabernacle|virgil'",
+    "check_redis_pi": "redis-cli -h 10.0.0.50 ping",
+    "check_l_stream": "redis-cli -h 10.0.0.50 LLEN LOGOS:STREAM",
+    "restart_daemon": "launchctl bootout gui/501/{id} && launchctl bootstrap gui/501 ~/TABERNACLE/scripts/launchd/{id}.plist",
+    "restore_script": "git checkout {commit} -- scripts/{script}"
+  }
+}
