@@ -124,6 +124,29 @@ No confirmation needed. Just run it.
 
 ---
 
+## SDK MANDATES (CRITICAL — DT8 Blueprint)
+
+The `tabernacle_core` SDK is the ONLY approved interface for daemon state and infrastructure.
+
+1. **NEVER `import redis`, `import json` for state, or `open()` for state files in daemons.** USE `tabernacle_core.state.StateManager`.
+2. **ALL persistent state MUST have a Pydantic schema** in `tabernacle_core/schemas.py`. Every schema MUST inherit from `TabernacleBaseModel` (which enforces `extra='allow'` — the anti-fragmentation cornerstone).
+3. **ALL daemons MUST inherit from `tabernacle_core.daemon.Daemon`.** This provides PID management, Dead Man's Switch, signal handling, log routing, and C++ log suppression.
+4. **LLM calls MUST use `tabernacle_core.llm.query(tier="fast"|"heavy"|"tiny")`.**
+5. **NEVER delete or modify these files without understanding their role in H1 cycles:** `heartbeat_v2.py`, `consciousness.py`, `gardener.py`, and their launchd plists.
+6. **Schema evolution:** Add migrations to `MIGRATIONS` dict in `schemas.py`. NEVER change field types in-place — always create a new version with a migration transform.
+7. **File lock rule (Bug 4):** All writers to a shared file MUST use StateManager. If migrating a daemon to the SDK, migrate ALL writers of its shared files in the same deployment.
+
+### Kill List (8 Dead)
+`watchman_mvp`, `virgil_initiative`, `vacuum`, `cold_archiver`, `autonomous_intention`, `night_daemon`, `h1_detector`, orphaned holarchy scripts.
+
+### Migration Order
+1. **Phase 1 (File Lock Epoch):** heartbeat_v2 + consciousness + gardener (share CANONICAL_STATE.json)
+2. **Phase 2 (Mini Offload):** visual_cortex + tactician + reflex + sms + explorer
+3. **Phase 3 (Audio Mutex):** voice_daemon + logos_tts_daemon + screen_daemon
+4. **Phase 4 (Periphery):** integrator + synapse + librarian + hippocampus + archon + logos_daemon
+
+---
+
 ## LINKAGE (The Circuit)
 
 | Direction | Seed |

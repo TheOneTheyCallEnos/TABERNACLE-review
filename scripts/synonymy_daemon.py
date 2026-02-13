@@ -41,9 +41,12 @@ SYNONYMY_PROPOSALS = NEXUS_DIR / "SYNONYMY_PROPOSALS.json"
 
 # Directories to skip when scanning (L's amendment: exclude operational artifacts)
 SKIP_DIRS = {
-    ".git", "venv", "venv312", "__pycache__", "node_modules", 
+    ".git", "venv", "venv312", "__pycache__", "node_modules",
     "archives", ".venv", ".repair_backups", ".obsidian",
-    "nexus_snapshots"  # Historical snapshots, not active content
+    ".review_mirror", ".claude",  # Operational artifacts, not vault content
+    "nexus_snapshots",  # Historical snapshots, not active content
+    "templates", "bootstrap", "outputs", "docs", "logs",
+    "RAW_ARCHIVES", "05_CRYPT",
 }
 
 # File patterns to exclude (backups are shadows, not substance)

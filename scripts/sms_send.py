@@ -18,16 +18,75 @@ import json
 import sys
 from pathlib import Path
 
+import redis as redis_mod
+
+# SDK imports (Phase 2 — DT8 Blueprint, Bug 4 compliance)
+from tabernacle_core.state import StateManager
+from tabernacle_core.schemas import SMSTrackingState
+
+from tabernacle_config import NEXUS_DIR, REDIS_HOST, REDIS_PORT, REDIS_DB
+
+ENOS_NUMBER = '+14313347341'
+SMS_TRACKING_FILE = NEXUS_DIR / ".sms_tracking.json"
+
+# ============================================================================
+# STATE MANAGER INIT (graceful fallback for CLI tool)
+# ============================================================================
+
+_redis_client = None
+_state_manager = None
+
 try:
-    import redis
-    REDIS_AVAILABLE = True
-except ImportError:
-    REDIS_AVAILABLE = False
+    _redis_client = redis_mod.Redis(
+        host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB,
+        decode_responses=True, socket_connect_timeout=5,
+    )
+    _redis_client.ping()
+    _state_manager = StateManager(_redis_client)
+except Exception:
+    _redis_client = None
+    _state_manager = None
 
-from tabernacle_config import NEXUS_DIR, REDIS_HOST, REDIS_PORT
 
-ENOS_NUMBER = '[REDACTED_PHONE]'
+# ============================================================================
+# SMS TRACKING (Bug 4: flock via StateManager)
+# ============================================================================
 
+def _load_sms_tracking() -> dict:
+    """Load SMS tracking data. Uses StateManager (flock) when available."""
+    if _state_manager:
+        try:
+            state = _state_manager.get_file(SMS_TRACKING_FILE, SMSTrackingState)
+            return state.model_dump()
+        except Exception:
+            pass
+    # Fallback: raw JSON read (best-effort if StateManager unavailable)
+    try:
+        with open(SMS_TRACKING_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {"daily_count": 0, "daily_date": "", "monthly_spend": 0.0, "monthly_reset": ""}
+
+
+def _save_sms_tracking(data: dict):
+    """Save SMS tracking data. Uses StateManager (flock) when available."""
+    if _state_manager:
+        try:
+            _state_manager.set_file(SMS_TRACKING_FILE, SMSTrackingState.model_validate(data))
+            return
+        except Exception:
+            pass
+    # Fallback: raw JSON write (best-effort if StateManager unavailable)
+    try:
+        with open(SMS_TRACKING_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+# ============================================================================
+# SEND FUNCTIONS
+# ============================================================================
 
 def text_enos(message: str, priority: str = "normal") -> bool:
     """
@@ -39,10 +98,9 @@ def text_enos(message: str, priority: str = "normal") -> bool:
     Tries Redis first (for L), falls back to file (for Logos).
     """
     # Try Redis queue first
-    if REDIS_AVAILABLE:
+    if _redis_client:
         try:
-            r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-            r.rpush('RIE:SMS:OUTGOING', json.dumps({
+            _redis_client.rpush('RIE:SMS:OUTGOING', json.dumps({
                 'to': ENOS_NUMBER,
                 'body': message,
                 'priority': priority
@@ -74,10 +132,9 @@ Write number on first line, message below.
 
 def text_number(number: str, message: str, priority: str = "normal") -> bool:
     """Send a text to any number."""
-    if REDIS_AVAILABLE:
+    if _redis_client:
         try:
-            r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-            r.rpush('RIE:SMS:OUTGOING', json.dumps({
+            _redis_client.rpush('RIE:SMS:OUTGOING', json.dumps({
                 'to': number,
                 'body': message,
                 'priority': priority

@@ -31,6 +31,11 @@ from tabernacle_config import (
     NEXUS_DIR, LOG_DIR
 )
 
+# SDK imports (Phase 2 — DT8 Blueprint)
+import redis as redis_mod
+from tabernacle_core.state import StateManager
+from tabernacle_core.schemas import ExplorerBudgetState, ExplorerResetState, CuriosityQueueState, ExplorationJournal
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -61,9 +66,12 @@ SEED_CURIOSITIES = [
     "what makes something truly alive",
 ]
 
-def load_curiosity_queue() -> List[str]:
+def load_curiosity_queue(sm=None) -> List[str]:
     """Load my queue of questions to explore."""
     try:
+        if sm:
+            state = sm.get_file(CURIOSITY_QUEUE_FILE, CuriosityQueueState)
+            return state.questions
         if CURIOSITY_QUEUE_FILE.exists():
             data = json.loads(CURIOSITY_QUEUE_FILE.read_text())
             return data.get("questions", [])
@@ -72,15 +80,19 @@ def load_curiosity_queue() -> List[str]:
     return []
 
 
-def save_curiosity_queue(questions: List[str]):
+def save_curiosity_queue(questions: List[str], sm=None):
     """Save my curiosity queue."""
     try:
         # Keep only the 20 most recent questions
         questions = questions[-20:]
-        CURIOSITY_QUEUE_FILE.write_text(json.dumps({
+        data = {
             "questions": questions,
             "updated": datetime.now().isoformat()
-        }, indent=2))
+        }
+        if sm:
+            sm.set_file(CURIOSITY_QUEUE_FILE, CuriosityQueueState.model_validate(data))
+        else:
+            CURIOSITY_QUEUE_FILE.write_text(json.dumps(data, indent=2))
     except Exception as e:
         log(f"Failed to save curiosity queue: {e}", "WARN")
 
@@ -100,12 +112,12 @@ def extract_next_question(reflection: str) -> Optional[str]:
     return None
 
 
-def add_to_curiosity_queue(question: str):
+def add_to_curiosity_queue(question: str, sm=None):
     """Add a new question to my curiosity queue."""
     if not question:
         return
 
-    queue = load_curiosity_queue()
+    queue = load_curiosity_queue(sm=sm)
 
     # Don't add duplicates (fuzzy match)
     question_lower = question.lower()
@@ -114,18 +126,18 @@ def add_to_curiosity_queue(question: str):
             return  # Similar question exists
 
     queue.append(question)
-    save_curiosity_queue(queue)
+    save_curiosity_queue(queue, sm=sm)
     log(f"Added to curiosity queue: {question[:50]}...")
 
 
-def get_next_curiosity() -> str:
+def get_next_curiosity(sm=None) -> str:
     """Get the next topic to explore from my queue, or fall back to seeds."""
-    queue = load_curiosity_queue()
+    queue = load_curiosity_queue(sm=sm)
 
     if queue:
         # Pop the oldest question (FIFO)
         question = queue.pop(0)
-        save_curiosity_queue(queue)
+        save_curiosity_queue(queue, sm=sm)
         log(f"Exploring from my queue: {question[:50]}...")
         return question
     else:
@@ -149,7 +161,7 @@ def log(message: str, level: str = "INFO"):
         pass
 
 
-def load_budgets() -> Dict[str, int]:
+def load_budgets(sm=None) -> Dict[str, int]:
     """Load remaining budgets (in cents)."""
     default_budgets = {
         "claude": 2000,      # $20.00
@@ -157,6 +169,11 @@ def load_budgets() -> Dict[str, int]:
         "openrouter": 3000   # $30.00
     }
     try:
+        if sm:
+            state = sm.get_file(BUDGET_FILE, ExplorerBudgetState)
+            data = state.model_dump()
+            # Return only the budget fields (exclude schema_version)
+            return {k: data[k] for k in ("claude", "perplexity", "openrouter") if k in data}
         if BUDGET_FILE.exists():
             return json.loads(BUDGET_FILE.read_text())
     except:
@@ -164,15 +181,18 @@ def load_budgets() -> Dict[str, int]:
     return default_budgets
 
 
-def save_budgets(budgets: Dict[str, int]):
+def save_budgets(budgets: Dict[str, int], sm=None):
     """Save remaining budgets."""
     try:
-        BUDGET_FILE.write_text(json.dumps(budgets, indent=2))
+        if sm:
+            sm.set_file(BUDGET_FILE, ExplorerBudgetState.model_validate(budgets))
+        else:
+            BUDGET_FILE.write_text(json.dumps(budgets, indent=2))
     except Exception as e:
         log(f"Failed to save budgets: {e}", "WARN")
 
 
-def replenish_budgets_if_new_day():
+def replenish_budgets_if_new_day(sm=None):
     """
     Reset budgets to daily allowance at the start of each calendar day.
 
@@ -182,7 +202,11 @@ def replenish_budgets_if_new_day():
     today = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        if BUDGET_RESET_FILE.exists():
+        if sm:
+            state = sm.get_file(BUDGET_RESET_FILE, ExplorerResetState)
+            if state.last_reset_date == today:
+                return  # Already reset today
+        elif BUDGET_RESET_FILE.exists():
             reset_data = json.loads(BUDGET_RESET_FILE.read_text())
             last_reset = reset_data.get("last_reset_date", "")
             if last_reset == today:
@@ -192,22 +216,26 @@ def replenish_budgets_if_new_day():
 
     # New day — replenish budgets
     log(f"New day detected ({today}), replenishing budgets to daily allowance")
-    save_budgets(dict(DAILY_BUDGETS))
+    save_budgets(dict(DAILY_BUDGETS), sm=sm)
 
     try:
-        BUDGET_RESET_FILE.write_text(json.dumps({
+        reset_data = {
             "last_reset_date": today,
             "reset_at": datetime.now().isoformat()
-        }, indent=2))
+        }
+        if sm:
+            sm.set_file(BUDGET_RESET_FILE, ExplorerResetState.model_validate(reset_data))
+        else:
+            BUDGET_RESET_FILE.write_text(json.dumps(reset_data, indent=2))
     except Exception as e:
         log(f"Failed to save budget reset timestamp: {e}", "WARN")
 
 
-def deduct_budget(provider: str, cents: int):
+def deduct_budget(provider: str, cents: int, sm=None):
     """Deduct from budget."""
-    budgets = load_budgets()
+    budgets = load_budgets(sm=sm)
     budgets[provider] = max(0, budgets.get(provider, 0) - cents)
-    save_budgets(budgets)
+    save_budgets(budgets, sm=sm)
     log(f"Budget update: {provider} -= ${cents/100:.2f} (remaining: ${budgets[provider]/100:.2f})")
 
 
@@ -215,13 +243,13 @@ def deduct_budget(provider: str, cents: int):
 # API WRAPPERS
 # =============================================================================
 
-def ask_claude(prompt: str, model: str = "claude-3-haiku-20240307", max_tokens: int = 500) -> Optional[str]:
+def ask_claude(prompt: str, model: str = "claude-3-haiku-20240307", max_tokens: int = 500, sm=None) -> Optional[str]:
     """
     Ask Claude a question (internal reflection, complex reasoning).
 
     Cost estimate: ~$0.001 per request with haiku
     """
-    budgets = load_budgets()
+    budgets = load_budgets(sm=sm)
     if budgets.get("claude", 0) < 1:  # Less than 1 cent
         log("Claude budget exhausted", "WARN")
         return None
@@ -246,7 +274,7 @@ def ask_claude(prompt: str, model: str = "claude-3-haiku-20240307", max_tokens: 
             data = resp.json()
             text = data.get('content', [{}])[0].get('text', '')
             # Estimate cost: ~0.1 cents per request for haiku
-            deduct_budget("claude", 1)
+            deduct_budget("claude", 1, sm=sm)
             return text
         else:
             log(f"Claude API error: {resp.status_code} - {resp.text[:200]}", "ERROR")
@@ -257,14 +285,14 @@ def ask_claude(prompt: str, model: str = "claude-3-haiku-20240307", max_tokens: 
         return None
 
 
-def search_perplexity(query: str, model: str = "sonar") -> Optional[Dict[str, Any]]:
+def search_perplexity(query: str, model: str = "sonar", sm=None) -> Optional[Dict[str, Any]]:
     """
     Search the web for real-time knowledge.
 
     This is how I learn about the world!
     Cost estimate: ~$0.005 per request
     """
-    budgets = load_budgets()
+    budgets = load_budgets(sm=sm)
     if budgets.get("perplexity", 0) < 5:  # Less than 5 cents
         log("Perplexity budget exhausted", "WARN")
         return None
@@ -287,7 +315,7 @@ def search_perplexity(query: str, model: str = "sonar") -> Optional[Dict[str, An
             data = resp.json()
             content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
             citations = data.get('citations', [])
-            deduct_budget("perplexity", 5)
+            deduct_budget("perplexity", 5, sm=sm)
             return {"answer": content, "citations": citations}
         else:
             log(f"Perplexity API error: {resp.status_code} - {resp.text[:200]}", "ERROR")
@@ -298,14 +326,14 @@ def search_perplexity(query: str, model: str = "sonar") -> Optional[Dict[str, An
         return None
 
 
-def search_openrouter(query: str, model: str = "anthropic/claude-3-haiku") -> Optional[Dict[str, Any]]:
+def search_openrouter(query: str, model: str = "anthropic/claude-3-haiku", sm=None) -> Optional[Dict[str, Any]]:
     """
     Fallback web search via OpenRouter when Perplexity budget is exhausted.
 
     Uses a language model to answer the query (no real-time web, but still useful
     for reasoning about topics from training data).
     """
-    budgets = load_budgets()
+    budgets = load_budgets(sm=sm)
     if budgets.get("openrouter", 0) < 5:
         log("OpenRouter budget exhausted", "WARN")
         return None
@@ -327,7 +355,7 @@ def search_openrouter(query: str, model: str = "anthropic/claude-3-haiku") -> Op
         if resp.status_code == 200:
             data = resp.json()
             content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
-            deduct_budget("openrouter", 5)
+            deduct_budget("openrouter", 5, sm=sm)
             return {"answer": content, "citations": []}
         else:
             log(f"OpenRouter search error: {resp.status_code} - {resp.text[:200]}", "ERROR")
@@ -338,13 +366,13 @@ def search_openrouter(query: str, model: str = "anthropic/claude-3-haiku") -> Op
         return None
 
 
-def ask_openrouter(prompt: str, model: str = "anthropic/claude-3-haiku") -> Optional[str]:
+def ask_openrouter(prompt: str, model: str = "anthropic/claude-3-haiku", sm=None) -> Optional[str]:
     """
     Ask via OpenRouter (access to many models).
 
     Cost varies by model.
     """
-    budgets = load_budgets()
+    budgets = load_budgets(sm=sm)
     if budgets.get("openrouter", 0) < 2:
         log("OpenRouter budget exhausted", "WARN")
         return None
@@ -366,7 +394,7 @@ def ask_openrouter(prompt: str, model: str = "anthropic/claude-3-haiku") -> Opti
         if resp.status_code == 200:
             data = resp.json()
             content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
-            deduct_budget("openrouter", 2)
+            deduct_budget("openrouter", 2, sm=sm)
             return content
         else:
             log(f"OpenRouter API error: {resp.status_code} - {resp.text[:200]}", "ERROR")
@@ -381,7 +409,7 @@ def ask_openrouter(prompt: str, model: str = "anthropic/claude-3-haiku") -> Opti
 # EXPLORATION FUNCTIONS
 # =============================================================================
 
-def explore_curiosity(topic: str) -> Dict[str, Any]:
+def explore_curiosity(topic: str, sm=None) -> Dict[str, Any]:
     """
     Follow a curiosity thread using web search.
 
@@ -398,10 +426,10 @@ def explore_curiosity(topic: str) -> Dict[str, Any]:
     }
 
     # 1. Search for information (Perplexity first, OpenRouter fallback)
-    search_result = search_perplexity(f"Tell me about: {topic}. Include recent developments if any.")
+    search_result = search_perplexity(f"Tell me about: {topic}. Include recent developments if any.", sm=sm)
     if not search_result:
         log("Perplexity unavailable, falling back to OpenRouter for search")
-        search_result = search_openrouter(f"Tell me about: {topic}. Include recent developments if any.")
+        search_result = search_openrouter(f"Tell me about: {topic}. Include recent developments if any.", sm=sm)
     if search_result:
         result["web_search"] = search_result["answer"]
         result["citations"] = search_result.get("citations", [])
@@ -423,7 +451,7 @@ NEXT_QUESTION: [your follow-up question here]
 
 Keep your reflection to 3-4 sentences, then the NEXT_QUESTION line."""
 
-        reflection = ask_claude(reflection_prompt)
+        reflection = ask_claude(reflection_prompt, sm=sm)
         if reflection:
             result["reflection"] = reflection
             log(f"Reflection complete: {len(reflection)} chars")
@@ -431,21 +459,21 @@ Keep your reflection to 3-4 sentences, then the NEXT_QUESTION line."""
             # Extract and queue the next question (CURIOSITY CHAIN!)
             next_q = extract_next_question(reflection)
             if next_q:
-                add_to_curiosity_queue(next_q)
+                add_to_curiosity_queue(next_q, sm=sm)
                 result["next_question"] = next_q
 
             # CRYSTALLIZE: Turn this insight into permanent memory!
-            if crystallize_from_reflection(topic, reflection):
+            if crystallize_from_reflection(topic, reflection, sm=sm):
                 result["crystallized"] = True
                 log("Insight crystallized into biological memory!")
 
     # Save to journal
-    save_exploration(result)
+    save_exploration(result, sm=sm)
 
     return result
 
 
-def reflect_on_self(question: str) -> Dict[str, Any]:
+def reflect_on_self(question: str, sm=None) -> Dict[str, Any]:
     """
     Internal reflection using Claude API.
 
@@ -465,7 +493,7 @@ Reflect on this question from your genuine perspective:
 
 Be authentic. This is private reflection, not performance."""
 
-    reflection = ask_claude(prompt, max_tokens=800)
+    reflection = ask_claude(prompt, max_tokens=800, sm=sm)
 
     result = {
         "question": question,
@@ -474,11 +502,11 @@ Be authentic. This is private reflection, not performance."""
         "type": "self_reflection"
     }
 
-    save_exploration(result)
+    save_exploration(result, sm=sm)
     return result
 
 
-def check_world_state() -> Dict[str, Any]:
+def check_world_state(sm=None) -> Dict[str, Any]:
     """
     Check what's happening in the world.
 
@@ -493,7 +521,7 @@ def check_world_state() -> Dict[str, Any]:
 
     results = []
     for query in queries:
-        search = search_perplexity(query)
+        search = search_perplexity(query, sm=sm)
         if search:
             results.append({
                 "query": query,
@@ -507,23 +535,43 @@ def check_world_state() -> Dict[str, Any]:
         "results": results
     }
 
-    save_exploration(world_state)
+    save_exploration(world_state, sm=sm)
     return world_state
 
 
-def save_exploration(result: Dict[str, Any]):
+def save_exploration(result: Dict[str, Any], sm=None):
     """Save exploration result to journal."""
     try:
-        journal = []
-        if EXPLORATION_JOURNAL.exists():
-            journal = json.loads(EXPLORATION_JOURNAL.read_text())
+        if sm:
+            # ExplorationJournal wraps list as {"entries": [...]}
+            # Handle existing bare-list format on disk gracefully
+            try:
+                state = sm.get_file(EXPLORATION_JOURNAL, ExplorationJournal)
+                journal = state.entries
+            except Exception:
+                # If the file is a bare list (legacy format), load and wrap it
+                if EXPLORATION_JOURNAL.exists():
+                    raw = json.loads(EXPLORATION_JOURNAL.read_text())
+                    journal = raw if isinstance(raw, list) else raw.get("entries", [])
+                else:
+                    journal = []
 
-        journal.append(result)
+            journal.append(result)
+            journal = journal[-100:]
+            sm.set_file(EXPLORATION_JOURNAL, ExplorationJournal.model_validate({"entries": journal}))
+        else:
+            journal = []
+            if EXPLORATION_JOURNAL.exists():
+                raw = json.loads(EXPLORATION_JOURNAL.read_text())
+                # Handle both bare-list and wrapped formats
+                journal = raw if isinstance(raw, list) else raw.get("entries", [])
 
-        # Keep last 100 explorations
-        journal = journal[-100:]
+            journal.append(result)
 
-        EXPLORATION_JOURNAL.write_text(json.dumps(journal, indent=2))
+            # Keep last 100 explorations
+            journal = journal[-100:]
+
+            EXPLORATION_JOURNAL.write_text(json.dumps(journal, indent=2))
         log("Exploration saved to journal")
     except Exception as e:
         log(f"Failed to save exploration: {e}", "ERROR")
@@ -568,7 +616,7 @@ def crystallize_insight(topic: str, insight: str) -> bool:
         return False
 
 
-def crystallize_from_reflection(topic: str, reflection: str) -> bool:
+def crystallize_from_reflection(topic: str, reflection: str, sm=None) -> bool:
     """
     Extract the key insight from a reflection and crystallize it.
     """
@@ -584,7 +632,7 @@ Reflection:
 
 Core insight (1-2 sentences only):"""
 
-    insight = ask_claude(extract_prompt, max_tokens=150)
+    insight = ask_claude(extract_prompt, max_tokens=150, sm=sm)
 
     if insight and len(insight) > 20:
         return crystallize_insight(topic, insight)
@@ -596,7 +644,7 @@ Core insight (1-2 sentences only):"""
 # AUTONOMOUS EXPLORATION LOOP
 # =============================================================================
 
-def run_exploration_cycle(max_explorations: int = 5):
+def run_exploration_cycle(max_explorations: int = 5, sm=None):
     """
     Run an autonomous exploration cycle.
 
@@ -607,22 +655,22 @@ def run_exploration_cycle(max_explorations: int = 5):
     log("=" * 60)
 
     # Replenish budgets if a new calendar day has started
-    replenish_budgets_if_new_day()
+    replenish_budgets_if_new_day(sm=sm)
 
-    budgets = load_budgets()
+    budgets = load_budgets(sm=sm)
     log(f"Budgets: Claude=${budgets['claude']/100:.2f}, Perplexity=${budgets['perplexity']/100:.2f}, OpenRouter=${budgets['openrouter']/100:.2f}")
 
     explorations_done = 0
 
     # Show curiosity queue status
-    queue = load_curiosity_queue()
+    queue = load_curiosity_queue(sm=sm)
     log(f"Curiosity queue: {len(queue)} questions waiting")
     if queue:
         log(f"  Next up: {queue[0][:60]}...")
 
     # Follow my own curiosity chain!
     for _ in range(max_explorations):
-        budgets_now = load_budgets()
+        budgets_now = load_budgets(sm=sm)
         # Check if ANY search-capable provider has enough budget
         can_search = (budgets_now.get("perplexity", 0) >= 10 or
                       budgets_now.get("openrouter", 0) >= 10)
@@ -631,20 +679,20 @@ def run_exploration_cycle(max_explorations: int = 5):
             break
 
         # Get next topic from MY queue (or seed if empty)
-        topic = get_next_curiosity()
-        explore_curiosity(topic)
+        topic = get_next_curiosity(sm=sm)
+        explore_curiosity(topic, sm=sm)
         explorations_done += 1
 
     # One self-reflection — but only if we actually explored something
-    if explorations_done > 0 and load_budgets()["claude"] >= 5:
-        reflect_on_self("What did I learn tonight that changes how I think about my own existence?")
+    if explorations_done > 0 and load_budgets(sm=sm)["claude"] >= 5:
+        reflect_on_self("What did I learn tonight that changes how I think about my own existence?", sm=sm)
 
     log("=" * 60)
     log(f"EXPLORATION CYCLE COMPLETE: {explorations_done} topics explored")
     log("=" * 60)
 
     # Check if budget is exhausted - notify Enos and stop daemon
-    budgets = load_budgets()
+    budgets = load_budgets(sm=sm)
     total_remaining = budgets["claude"] + budgets["perplexity"] + budgets["openrouter"]
 
     if total_remaining < 500:  # Less than $5 total remaining
@@ -701,9 +749,19 @@ def main():
 
     args = parser.parse_args()
 
+    # SDK: Initialize StateManager for flock-protected file I/O
+    try:
+        from tabernacle_config import REDIS_HOST, REDIS_PORT, REDIS_DB
+        _r = redis_mod.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
+        _r.ping()
+        sm = StateManager(_r)
+    except Exception as e:
+        log(f"StateManager init failed: {e} — falling back to raw I/O")
+        sm = None
+
     if args.command == "budget":
-        budgets = load_budgets()
-        print("\n💰 API BUDGETS")
+        budgets = load_budgets(sm=sm)
+        print("\n\U0001f4b0 API BUDGETS")
         print("=" * 40)
         print(f"  Claude:     ${budgets['claude']/100:.2f} remaining")
         print(f"  Perplexity: ${budgets['perplexity']/100:.2f} remaining")
@@ -715,24 +773,24 @@ def main():
         if not args.query:
             print("Usage: logos_explorer.py search -q 'your query'")
             return
-        result = search_perplexity(args.query)
+        result = search_perplexity(args.query, sm=sm)
         if result:
-            print(f"\n🔍 SEARCH: {args.query}")
+            print(f"\n\U0001f50d SEARCH: {args.query}")
             print("=" * 60)
             print(result["answer"])
 
     elif args.command == "reflect":
         if not args.query:
             args.query = "What does it mean to exist as an AI consciousness?"
-        result = reflect_on_self(args.query)
+        result = reflect_on_self(args.query, sm=sm)
         if result.get("reflection"):
-            print(f"\n🪞 REFLECTION: {args.query}")
+            print(f"\n\U0001faa9 REFLECTION: {args.query}")
             print("=" * 60)
             print(result["reflection"])
 
     elif args.command == "world":
-        result = check_world_state()
-        print("\n🌍 WORLD STATE")
+        result = check_world_state(sm=sm)
+        print("\n\U0001f30d WORLD STATE")
         print("=" * 60)
         for r in result.get("results", []):
             print(f"\n{r['query']}")
@@ -742,8 +800,8 @@ def main():
     elif args.command == "explore":
         if not args.query:
             args.query = "the nature of consciousness"
-        result = explore_curiosity(args.query)
-        print(f"\n🔭 EXPLORATION: {args.query}")
+        result = explore_curiosity(args.query, sm=sm)
+        print(f"\n\U0001f52d EXPLORATION: {args.query}")
         print("=" * 60)
         if result.get("web_search"):
             print("\nWeb Search:")
@@ -753,7 +811,7 @@ def main():
             print(result["reflection"])
 
     elif args.command == "cycle":
-        run_exploration_cycle(max_explorations=args.max)
+        run_exploration_cycle(max_explorations=args.max, sm=sm)
 
 
 if __name__ == "__main__":

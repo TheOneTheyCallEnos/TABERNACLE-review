@@ -46,6 +46,9 @@ from tabernacle_config import (
 
 from structures.engrams import ActionAtom, MyelinatedReflex
 
+# SDK imports (Phase 2 — DT8 Blueprint)
+from tabernacle_core.daemon import Daemon
+
 # RIE BROADCAST (2026-02-05) — p=0.85 Ceiling Breakthrough Phase 1
 # Inter-agent coherence vector sharing for collective field emergence
 try:
@@ -229,16 +232,17 @@ JSON output:"""
 # TACTICIAN DAEMON
 # =============================================================================
 
-class TacticianDaemon:
+class TacticianDaemon(Daemon):
     """
     The O(1) execution engine.
 
     Executes myelinated reflexes without planning.
     """
+    name = "tactician_daemon"
+    tick_interval = 0.1  # Matches the current 0.1s polling sleep
 
     def __init__(self):
-        self.redis = None
-        self.running = False
+        super().__init__()
 
         # Components
         self.reflex_store = ReflexStore()
@@ -266,25 +270,10 @@ class TacticianDaemon:
         self._p_history = []
         self._last_p = 0.5
 
-    def connect(self) -> bool:
-        """Connect to Redis."""
-        try:
-            self.redis = redis.Redis(
-                host=REDIS_HOST,
-                port=REDIS_PORT,
-                decode_responses=True
-            )
-            self.redis.ping()
-            log(f"Connected to Redis @ {REDIS_HOST}:{REDIS_PORT}")
-            return True
-        except Exception as e:
-            log(f"Redis connection failed: {e}", "ERROR")
-            return False
-
     def get_current_coherence(self) -> float:
         """Get current p from RIE state."""
         try:
-            state = self.redis.get(LVS_STATE_KEY)
+            state = self._redis.get(LVS_STATE_KEY)
             if state:
                 data = json.loads(state)
                 return data.get("p", 0.5)
@@ -321,10 +310,10 @@ class TacticianDaemon:
 
     def _broadcast_coherence(self):
         """Broadcast coherence vector to collective field after execution."""
-        if not self.broadcaster or not self.redis:
+        if not self.broadcaster or not self._redis:
             return
         try:
-            state = self.redis.get(LVS_STATE_KEY)
+            state = self._redis.get(LVS_STATE_KEY)
             if state:
                 data = json.loads(state)
                 self.broadcaster.publish_vector(
@@ -339,7 +328,7 @@ class TacticianDaemon:
     def publish_action(self, atom: ActionAtom, context: Dict = None):
         """Publish action to LOGOS:ACTION for Hippocampus."""
         try:
-            self.redis.publish(ACTION_CHANNEL, json.dumps({
+            self._redis.publish(ACTION_CHANNEL, json.dumps({
                 "tool": atom.tool,
                 "action": atom.action,
                 "selector": atom.selector,
@@ -391,7 +380,7 @@ class TacticianDaemon:
         log(f"HAND: {action}({selector}, {value})")
         # TODO: Call actual hand_daemon
         # For now, publish command to Redis
-        self.redis.publish("HAND:COMMAND", json.dumps({
+        self._redis.publish("HAND:COMMAND", json.dumps({
             "action": action,
             "selector": selector,
             "value": value
@@ -402,7 +391,7 @@ class TacticianDaemon:
         """Execute via eye_daemon (Playwright)."""
         log(f"EYE: {action}({selector}, {value})")
         # TODO: Call actual eye_daemon
-        self.redis.publish("EYE:COMMAND", json.dumps({
+        self._redis.publish("EYE:COMMAND", json.dumps({
             "action": action,
             "selector": selector,
             "value": value
@@ -412,7 +401,7 @@ class TacticianDaemon:
     def _execute_voice(self, text: str) -> bool:
         """Speak via TTS."""
         log(f"VOICE: {text[:50]}...")
-        self.redis.rpush("TTS:QUEUE", json.dumps({
+        self._redis.rpush("TTS:QUEUE", json.dumps({
             "text": text,
             "type": "tactician"
         }))
@@ -480,7 +469,7 @@ class TacticianDaemon:
 
             if not success:
                 # Alert Archon
-                self.redis.publish(ARCHON_ALERT_KEY, json.dumps({
+                self._redis.publish(ARCHON_ALERT_KEY, json.dumps({
                     "type": "reflex_failure",
                     "reflex": reflex.trigger_pattern,
                     "step": i,
@@ -523,55 +512,32 @@ class TacticianDaemon:
         else:
             # No reflex found - escalate to Strategos (Opus)
             log(f"No reflex found for: {intent[:50]}...")
-            self.redis.publish("LOGOS:STRATEGOS_NEEDED", json.dumps({
+            self._redis.publish("LOGOS:STRATEGOS_NEEDED", json.dumps({
                 "intent": intent,
                 "reason": "no_reflex_match",
                 "timestamp": datetime.now().isoformat()
             }))
             return False, "No matching reflex - escalating to Strategos"
 
-    def run(self):
-        """Main daemon loop - listen for requests."""
-        if not self.connect():
-            return
+    def on_start(self):
+        """Called once after Redis connection established."""
+        self.log.info(f"Tactician online | Reflexes: {len(self.reflex_store.reflexes)}")
 
-        self.running = True
-        log("=" * 60)
-        log("TACTICIAN DAEMON STARTING")
-        log(f"Reflexes loaded: {len(self.reflex_store.reflexes)}")
-        log(f"Hydration model: {HYDRATION_MODEL}")
-        log("The O(1) execution engine is ready...")
-        log("=" * 60)
+    def tick(self):
+        """Called every tick_interval. Process one queue item."""
+        data = self._redis.lpop("LOGOS:TACTICIAN_QUEUE")
+        if data:
+            try:
+                intent = json.loads(data)
+                result = self.handle_request(intent)
+                if result:
+                    self._redis.publish("LOGOS:TACTICIAN_RESULT", json.dumps(result))
+            except Exception as e:
+                self.log.error(f"Request handling error: {e}")
 
-        try:
-            while self.running:
-                # Check for requests in queue
-                request = self.redis.lpop(TACTICIAN_QUEUE)
-
-                if request:
-                    try:
-                        data = json.loads(request)
-                        intent = data.get("intent", "")
-
-                        if intent:
-                            success, message = self.handle_request(intent)
-                            log(f"Result: {success} - {message}")
-
-                            # Publish result
-                            self.redis.publish("LOGOS:TACTICIAN_RESULT", json.dumps({
-                                "intent": intent,
-                                "success": success,
-                                "message": message
-                            }))
-                    except Exception as e:
-                        log(f"Request handling error: {e}", "ERROR")
-
-                time.sleep(0.1)  # Brief sleep
-
-        except KeyboardInterrupt:
-            log("Shutting down...")
-        finally:
-            self.running = False
+    def on_stop(self):
+        """Called during graceful shutdown."""
+        self.log.info("Tactician shutting down")
 
 
 # =============================================================================
@@ -590,8 +556,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "run":
-        daemon = TacticianDaemon()
-        daemon.run()
+        TacticianDaemon().run()
 
     elif args.command == "list":
         store = ReflexStore()

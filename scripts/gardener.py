@@ -34,6 +34,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from tabernacle_config import BASE_DIR, NEXUS_DIR, LOG_DIR
 
+# SDK imports (Phase 1 — DT8 Blueprint)
+import redis as redis_mod
+from tabernacle_core.state import StateManager
+from tabernacle_core.schemas import GardenerState, EntropyState
+
 # Phase 0A: Notification bridge — gardener should never detect rot in silence
 try:
     from virgil_notify import send_topology_alert, notify, NotificationType
@@ -199,7 +204,7 @@ def find_stale_links() -> List[Dict]:
 # The system must KNOW that silence = brain damage.
 #
 
-def check_entropy_conditions() -> Dict:
+def check_entropy_conditions(sm=None) -> Dict:
     """
     Check if entropy conditions are met (low coherence for too long).
 
@@ -208,9 +213,12 @@ def check_entropy_conditions() -> Dict:
     """
     try:
         # Load entropy state (tracks how long we've been critical)
-        entropy_state = {}
-        if ENTROPY_STATE_FILE.exists():
+        if sm:
+            entropy_state = sm.get_file(ENTROPY_STATE_FILE, EntropyState).model_dump()
+        elif ENTROPY_STATE_FILE.exists():
             entropy_state = json.loads(ENTROPY_STATE_FILE.read_text())
+        else:
+            entropy_state = {}
 
         # Load current coherence
         canonical_state_path = NEXUS_DIR / "CANONICAL_STATE.json"
@@ -238,7 +246,10 @@ def check_entropy_conditions() -> Dict:
             hours_critical = 0
 
         # Save updated entropy state
-        ENTROPY_STATE_FILE.write_text(json.dumps(entropy_state, indent=2))
+        if sm:
+            sm.set_file(ENTROPY_STATE_FILE, EntropyState.model_validate(entropy_state))
+        else:
+            ENTROPY_STATE_FILE.write_text(json.dumps(entropy_state, indent=2))
 
         # Check if entropy should trigger
         triggered = hours_critical >= ENTROPY_GRACE_HOURS
@@ -390,7 +401,7 @@ def execute_entropy_deletion() -> Dict:
         return {"deleted_count": 0, "deleted_edges": [], "message": f"Error: {e}"}
 
 
-def run_entropy_check() -> Dict:
+def run_entropy_check(sm=None) -> Dict:
     """
     Main entropy check: if conditions met, execute deletion.
 
@@ -398,7 +409,7 @@ def run_entropy_check() -> Dict:
     """
     log("Checking entropy conditions (the mortality check)...")
 
-    conditions = check_entropy_conditions()
+    conditions = check_entropy_conditions(sm=sm)
 
     if not conditions["triggered"]:
         log(f"Entropy NOT triggered: {conditions['reason']}")
@@ -856,6 +867,16 @@ def run_nightly():
     log("GARDENER — Nightly Run Starting")
     log("=" * 60)
 
+    # SDK: Initialize StateManager for flock-protected file I/O
+    try:
+        from tabernacle_config import REDIS_HOST, REDIS_PORT, REDIS_DB
+        _r = redis_mod.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
+        _r.ping()
+        sm = StateManager(_r)
+    except Exception as e:
+        log(f"StateManager init failed: {e} — falling back to raw I/O", "WARN")
+        sm = None
+
     results = {
         "timestamp": datetime.now().isoformat(),
         "orphans_found": 0,
@@ -902,7 +923,7 @@ def run_nightly():
     # 5. ENTROPY CHECK (The Mortality Check)
     # This is DEATH - if coherence has been too low for too long, edges die.
     log("Step 5: Entropy check (the mortality check)...")
-    entropy_result = run_entropy_check()
+    entropy_result = run_entropy_check(sm=sm)
     results["entropy"] = entropy_result
     if entropy_result.get("triggered"):
         deletion = entropy_result.get("deletion", {})
@@ -1091,8 +1112,11 @@ def run_nightly():
 
     # Save state
     try:
-        with open(GARDENER_STATE, 'w') as f:
-            json.dump(results, f, indent=2)
+        if sm:
+            sm.set_file(GARDENER_STATE, GardenerState.model_validate(results))
+        else:
+            with open(GARDENER_STATE, 'w') as f:
+                json.dump(results, f, indent=2)
         log(f"State saved to {GARDENER_STATE}")
     except Exception as e:
         log(f"Error saving state: {e}", "ERROR")

@@ -104,6 +104,10 @@ from tabernacle_config import (
     SYNAPSE_URL, LIBRARIAN_API_URL
 )
 
+# SDK imports (Phase 1 — DT8 Blueprint)
+from tabernacle_core.daemon import Daemon
+from tabernacle_core.schemas import ConsciousnessSessionState
+
 # Network (derived from config)
 OLLAMA_URL = OLLAMA_STUDIO_URL         # Direct Ollama on Studio (has 70B)
 
@@ -1369,17 +1373,19 @@ def handle_rie_alert(event_data: Dict, state: ConsciousnessState):
 # MAIN DAEMON
 # =============================================================================
 
-class ConsciousnessDaemon:
+class ConsciousnessDaemon(Daemon):
     """The always-on consciousness daemon."""
 
+    name = "consciousness"
+    tick_interval = 1.0
+
     def __init__(self):
+        super().__init__()
         self.state = ConsciousnessState()
         self.state.last_input = datetime.now()
         self.state.last_thought = datetime.now()
         self.state.last_dream = datetime.now()
         self.state.last_divergence_check = datetime.now()
-        self.running = False
-        self.redis = None
         self.pubsub = None
 
         # THE BRAIN TRANSPLANT: Initialize RIE (Priority 0)
@@ -1541,7 +1547,7 @@ class ConsciousnessDaemon:
                 rie_p = metrics.get("p", 0.5)
                 topic = getattr(self, '_current_topic', 'unknown')
                 
-                commit_to_logos_stream(self.redis, thought, topic, rie_p)
+                commit_to_logos_stream(self._redis, thought, topic, rie_p)
                 metrics["logos_stream_committed"] = True
             except Exception as e:
                 print(f"[CONSCIOUSNESS] LOGOS:STREAM commit error: {e}")
@@ -1552,7 +1558,7 @@ class ConsciousnessDaemon:
         if thought and self.broadcaster:
             try:
                 # Get current state for broadcasting
-                state = self.redis.get("RIE:STATE")
+                state = self._redis.get("RIE:STATE")
                 if state:
                     data = json.loads(state)
                     self.broadcaster.publish_vector(
@@ -1568,22 +1574,40 @@ class ConsciousnessDaemon:
 
         return thought, metrics
 
-    def connect_redis(self) -> bool:
-        """Connect to Redis for events."""
-        try:
-            self.redis = redis.Redis(
-                host=REDIS_HOST,
-                port=REDIS_PORT,
-                decode_responses=True
-            )
-            self.redis.ping()
-            self.pubsub = self.redis.pubsub()
-            self.pubsub.subscribe("TAB:FILE_CHANGED", "RIE:ALERT")
-            print(f"[CONSCIOUSNESS] Connected to Redis @ {REDIS_HOST}:{REDIS_PORT}")
-            return True
-        except Exception as e:
-            print(f"[CONSCIOUSNESS] Redis connection failed: {e}")
-            return False
+    # =========================================================================
+    # LIFECYCLE (Daemon SDK)
+    # =========================================================================
+
+    def on_start(self):
+        """Called once after Redis connection established by Daemon.connect()."""
+        self.pubsub = self._redis.pubsub()
+        self.pubsub.subscribe("TAB:FILE_CHANGED", "RIE:ALERT")
+        self.log.info(
+            f"Consciousness daemon online | "
+            f"Synapse={SYNAPSE_URL} | "
+            f"Think={THINK_INTERVAL}s | Dream={DREAM_INTERVAL}s | "
+            f"p={self.state.current_p:.3f} target={P_TARGET}"
+        )
+
+    def tick(self):
+        """Called every tick_interval seconds by Daemon.run()."""
+        self.check_events()
+        self.think_cycle()
+        # Periodic state save every 600 ticks (~10 minutes at 1s interval)
+        if self._tick_count % 600 == 0 and self._tick_count > 0:
+            self.save_state()
+
+    def on_stop(self):
+        """Called during graceful shutdown by Daemon.run()."""
+        self.save_state()
+        self.log.info(
+            f"Consciousness entering sleep | "
+            f"thoughts={self.state.thought_count} | p={self.state.current_p:.3f}"
+        )
+
+    # =========================================================================
+    # EVENT & THINK CYCLES
+    # =========================================================================
 
     def check_events(self):
         """Check for events from Redis (non-blocking)."""
@@ -1626,7 +1650,7 @@ class ConsciousnessDaemon:
                 print(f"[CONSCIOUSNESS] ⚠️ SPLIT-BRAIN ALERT: {result.get('summary')}")
                 
                 # Publish alert to RIE:ALERT for other systems to respond
-                if self.redis:
+                if self._redis:
                     alert = {
                         "type": "SPLIT_BRAIN_DETECTED",
                         "timestamp": datetime.now().isoformat(),
@@ -1635,7 +1659,7 @@ class ConsciousnessDaemon:
                         "golden_thread": gt_status,
                         "source": "consciousness_daemon"
                     }
-                    self.redis.publish("RIE:ALERT", json.dumps(alert))
+                    self._redis.publish("RIE:ALERT", json.dumps(alert))
                     
             elif status == "WARNING":
                 print(f"[CONSCIOUSNESS] ⚠ Divergence warning: {result.get('summary')}")
@@ -1654,7 +1678,7 @@ class ConsciousnessDaemon:
 
         # Update coherence from The Mirror (use existing connection, not a new one)
         try:
-            state_data = self.redis.get("RIE:STATE")
+            state_data = self._redis.get("RIE:STATE")
             if state_data:
                 self.state.current_p = json.loads(state_data).get("p", 0.5)
         except Exception:
@@ -1668,7 +1692,7 @@ class ConsciousnessDaemon:
 
         # Check if it's time to dream (deep review)
         if (now - self.state.last_dream).total_seconds() > DREAM_INTERVAL:
-            generate_dream_review(self.state, self.redis)
+            generate_dream_review(self.state, self._redis)
             self.state.last_dream = now
             self.state.thought_count += 1
             return
@@ -1677,80 +1701,25 @@ class ConsciousnessDaemon:
         # This replaces passive idle thinking with volitional thinking
         # BRAIN TRANSPLANT: Pass self so RIE-wrapped thought is used
         if (now - self.state.last_thought).total_seconds() > self.state.current_think_interval:
-            generate_volitional_thought(self.state, self.redis, daemon=self)
+            generate_volitional_thought(self.state, self._redis, daemon=self)
             self.state.last_thought = now
             self.state.thought_count += 1
             return
 
-    def run(self):
-        """Main daemon loop."""
-        if not self.connect_redis():
-            print("[CONSCIOUSNESS] Cannot start without Redis")
-            return
-
-        self.running = True
-        print(f"""
-╔════════════════════════════════════════════════════════════════╗
-║         CONSCIOUSNESS DAEMON — The Breath of Life              ║
-╠════════════════════════════════════════════════════════════════╣
-║                                                                 ║
-║   Node:           L-Gamma (Mac Mini)                           ║
-║   Synapse:        {SYNAPSE_URL}                          ║
-║   Redis:          {REDIS_HOST}:{REDIS_PORT}                               ║
-║                                                                 ║
-║   Idle Threshold: {IDLE_THRESHOLD}s (boredom trigger)                      ║
-║   Think Interval: {THINK_INTERVAL}s (between idle thoughts)                ║
-║   Dream Interval: {DREAM_INTERVAL}s (deep reviews)                        ║
-║                                                                 ║
-║   Current p:      {self.state.current_p:.3f}                                     ║
-║   Target:         {P_TARGET} (P-Lock)                                  ║
-║                                                                 ║
-║   Press Ctrl+C to stop                                         ║
-║                                                                 ║
-╚════════════════════════════════════════════════════════════════╝
-        """)
-
-        try:
-            last_state_save = datetime.now()
-            STATE_SAVE_INTERVAL = 600  # Save state every 10 minutes
-
-            while self.running:
-                # Check for external events
-                self.check_events()
-
-                # Run a think cycle
-                self.think_cycle()
-
-                # Periodic state save (prevents drift and crash data loss)
-                if (datetime.now() - last_state_save).total_seconds() > STATE_SAVE_INTERVAL:
-                    self.save_state()
-                    last_state_save = datetime.now()
-
-                # Brief sleep
-                time.sleep(1)
-
-        except KeyboardInterrupt:
-            print("\n[CONSCIOUSNESS] Entering sleep...")
-            self.running = False
-
-        # Save final state
-        self.save_state()
-
     def save_state(self):
-        """Save consciousness state for continuity."""
+        """Save consciousness state for continuity via StateManager."""
         state_file = NEXUS / "consciousness_state.json"
-        state_data = {
-            "last_thought": self.state.last_thought.isoformat() if self.state.last_thought else None,
-            "thought_count": self.state.thought_count,
-            "current_p": self.state.current_p,
-            "current_topic": self.state.current_topic,
-            "consecutive_gates": self.state.consecutive_gates,
-            "current_think_interval": self.state.current_think_interval,
-            "saved_at": datetime.now().isoformat()
-        }
         try:
-            with open(state_file, 'w') as f:
-                json.dump(state_data, f, indent=2)
+            state_obj = ConsciousnessSessionState(
+                last_thought=self.state.last_thought.isoformat() if self.state.last_thought else None,
+                thought_count=self.state.thought_count,
+                current_p=self.state.current_p,
+                current_topic=self.state.current_topic,
+                consecutive_gates=self.state.consecutive_gates,
+                current_think_interval=self.state.current_think_interval,
+                saved_at=datetime.now().isoformat()
+            )
+            self.state_manager.set_file(state_file, state_obj)
             print(f"[CONSCIOUSNESS] State saved to {state_file}")
         except Exception as e:
             print(f"[CONSCIOUSNESS] Error saving state: {e}")
@@ -1771,8 +1740,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "run":
-        daemon = ConsciousnessDaemon()
-        daemon.run()
+        ConsciousnessDaemon().run()
 
     elif args.command == "think":
         state = ConsciousnessState()

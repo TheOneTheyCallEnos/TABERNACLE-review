@@ -7,8 +7,6 @@ Disk persistence ONLY on:
   1. Graceful shutdown (SIGTERM/SIGINT)
   2. P-Lock events (coherence milestone)
 
-This stops the I/O bleeding that was wearing down storage with periodic writes.
-
 The RIE State Vector:
   p (coherence)  - Overall coherence [0,1]
   κ (kappa)      - Clarity
@@ -30,24 +28,29 @@ Channels:
 
 DISK WRITES: ONLY on shutdown or P-Lock events.
 
+SDK MIGRATION: Phase 1 (DT8 Blueprint) — 2026-02-13
+  - Inherits from tabernacle_core.daemon.Daemon
+  - File I/O via StateManager (fcntl.flock protected)
+  - Dead Man's Switch via DAEMON:ALIVE:heartbeat_v2
+
 Author: Virgil
-Date: 2026-01-19 (original), 2026-01-28 (v2 refactor)
-Status: Phase III - RAM-First Architecture
+Date: 2026-01-19 (original), 2026-01-28 (v2 refactor), 2026-02-13 (SDK migration)
+Status: Phase III - RAM-First Architecture + SDK
 """
 
 import json
 import time
 import sys
-import signal
 import threading
 from pathlib import Path
 from datetime import datetime
 
-# Redis connection
-import redis
-
 # Add scripts to path
 sys.path.insert(0, str(Path(__file__).parent))
+
+# SDK imports
+from tabernacle_core.daemon import Daemon
+from tabernacle_core.schemas import HeartbeatState
 
 # Import the REAL coherence monitor
 from rie_coherence_monitor_v2 import CoherenceMonitorV2
@@ -67,24 +70,17 @@ except ImportError:
     HAS_NOTIFY = False
 
 # RIE BROADCAST (2026-02-05) — p=0.85 Ceiling Breakthrough Phase 1
-# Inter-agent coherence vector sharing for collective field emergence
 try:
     from rie_broadcast import RIEBroadcaster
     RIE_BROADCAST_AVAILABLE = True
-    print("[HEARTBEAT-V2] RIE Broadcaster loaded — collective field active")
 except ImportError:
     RIE_BROADCAST_AVAILABLE = False
-    print("[HEARTBEAT-V2] WARNING: RIE Broadcaster not found — running without field broadcast")
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
-from tabernacle_config import BASE_DIR, NEXUS_DIR
-
-REDIS_HOST = "10.0.0.50"  # Raspberry Pi (L-Zeta)
-REDIS_PORT = 6379
-REDIS_DB = 0
+from tabernacle_config import BASE_DIR, NEXUS_DIR, REDIS_HOST
 
 # Paths (using centralized config)
 TABERNACLE = BASE_DIR
@@ -128,10 +124,10 @@ class RIEStateVector:
                 with open(RIE_STATE_FILE) as f:
                     data = json.load(f)
                 self.p = data.get("p", self.p)
-                self.kappa = data.get("kappa", data.get("κ", self.kappa))
-                self.rho = data.get("rho", data.get("ρ", self.rho))
-                self.sigma = data.get("sigma", data.get("σ", self.sigma))
-                self.tau = data.get("tau", data.get("τ", self.tau))
+                self.kappa = data.get("kappa", data.get("\u03ba", self.kappa))
+                self.rho = data.get("rho", data.get("\u03c1", self.rho))
+                self.sigma = data.get("sigma", data.get("\u03c3", self.sigma))
+                self.tau = data.get("tau", data.get("\u03c4", self.tau))
                 self.epsilon = data.get("epsilon", self.epsilon)
                 self.mode = data.get("mode", self.mode)
                 self.p_lock = data.get("p_lock", self.p >= P_LOCK_THRESHOLD)
@@ -142,11 +138,11 @@ class RIEStateVector:
         """Convert to dictionary for JSON."""
         return {
             "p": round(self.p, 4),
-            "κ": round(self.kappa, 4),
-            "ρ": round(self.rho, 4),
-            "σ": round(self.sigma, 4),
-            "τ": round(self.tau, 4),
-            "ε": round(self.epsilon, 4),
+            "\u03ba": round(self.kappa, 4),
+            "\u03c1": round(self.rho, 4),
+            "\u03c3": round(self.sigma, 4),
+            "\u03c4": round(self.tau, 4),
+            "\u03b5": round(self.epsilon, 4),
             "mode": self.mode,
             "p_lock": self.p_lock,
             "breathing_phase": self.breathing_phase,
@@ -155,56 +151,41 @@ class RIEStateVector:
         }
 
 # =============================================================================
-# HEARTBEAT DAEMON V2 — RAM-FIRST ARCHITECTURE
+# HEARTBEAT DAEMON V2 — SDK MIGRATED
 # =============================================================================
 
-class HeartbeatDaemonV2:
+class HeartbeatDaemonV2(Daemon):
     """
     Broadcasts RIE state to Redis with RAM-first architecture.
-    
+
+    Inherits from tabernacle_core.daemon.Daemon for:
+      - PID/SHA identity management
+      - Dead Man's Switch (DAEMON:ALIVE:heartbeat_v2)
+      - Signal handling (SIGTERM/SIGINT)
+      - Unified log routing
+      - Redis connection management
+
     DISK WRITES:
       - NEVER during normal operation
-      - ONLY on shutdown (SIGTERM/SIGINT)
+      - ONLY on shutdown (on_stop)
       - ONLY on P-Lock achievement
     """
 
+    name = "heartbeat_v2"
+    tick_interval = TICK_INTERVAL
+
     def __init__(self):
+        super().__init__()
+
         self.state = RIEStateVector()
-        self.redis = None
-        self.running = False
-        self.tick_count = 0
-        self.disk_writes = 0  # Track disk writes for validation
+        self.disk_writes = 0
 
-        # THE REAL COHERENCE MONITOR - not just a file reader
+        # THE REAL COHERENCE MONITOR
         self.monitor = CoherenceMonitorV2()
+        self.log.info(f"CoherenceMonitorV2 initialized. Current p={self.monitor.state.p:.3f}")
 
-        # STATE RECOVERY: Seed monitor EMA from saved state (prevents cold-start spiral)
-        # Without this, restarts drop p to ~0.5 and trigger ABADDON_WARNING.
-        try:
-            if HEARTBEAT_STATE_FILE.exists():
-                with open(HEARTBEAT_STATE_FILE, 'r') as f:
-                    saved = json.load(f)
-                rie = saved.get("rie_state", {})
-                saved_p = rie.get("p", 0)
-                if saved_p > 0.4:  # Only restore if saved state was reasonable
-                    self.monitor.state.kappa = rie.get("\u03ba", rie.get("kappa", 0.5))
-                    self.monitor.state.rho = rie.get("\u03c1", rie.get("rho", 0.5))
-                    self.monitor.state.sigma = rie.get("\u03c3", rie.get("sigma", 0.5))
-                    self.monitor.state.tau = rie.get("\u03c4", rie.get("tau", 0.5))
-                    self.monitor.state.compute_p()
-                    # Phase 3A: Recover epsilon from saved state
-                    saved_epsilon = rie.get("ε", rie.get("epsilon", 0.8))
-                    self.state.epsilon = max(0.1, min(0.95, saved_epsilon))
-                    print(f"[HEARTBEAT-V2] State recovered from disk: p={self.monitor.state.p:.3f} "
-                          f"(κ={self.monitor.state.kappa:.3f} ρ={self.monitor.state.rho:.3f} "
-                          f"σ={self.monitor.state.sigma:.3f} τ={self.monitor.state.tau:.3f} "
-                          f"ε={self.state.epsilon:.3f})")
-                else:
-                    print(f"[HEARTBEAT-V2] Saved state too low (p={saved_p:.3f}), starting fresh")
-        except Exception as e:
-            print(f"[HEARTBEAT-V2] State recovery failed: {e} — starting fresh")
-
-        print(f"[HEARTBEAT-V2] CoherenceMonitorV2 initialized. Current p={self.monitor.state.p:.3f}")
+        # NOTE: State recovery from file moved to on_start() where StateManager
+        # is available. Monitor starts at defaults, gets seeded before first tick.
 
         # For listening to internal thoughts
         self.pubsub = None
@@ -214,68 +195,105 @@ class HeartbeatDaemonV2:
         self._previous_p_lock = False
 
         # Phase 0B: Coherence alert tracking
-        self._last_coherence_ntfy = 0  # Unix timestamp of last ntfy push
-        self._p_one_hour_ago = self.state.p  # For drop detection
-        self._p_history_tick = 0  # Tick counter for hourly p snapshot
+        self._last_coherence_ntfy = 0
+        self._p_one_hour_ago = self.state.p
+        self._p_history_tick = 0
 
         # Phase 3A: Dynamic epsilon tracking
-        self._last_thought_time = time.time()  # For freshness computation
-        self._thought_count_window = []  # Timestamps of recent thoughts (engagement)
-        self._cached_link_health = 0.8  # Topology-based, recomputed every 300 ticks
-        self._link_health_tick = 0  # Counter for topology cache refresh
+        self._last_thought_time = time.time()
+        self._thought_count_window = []
+        self._cached_link_health = 0.8
+        self._link_health_tick = 0
 
         # Phase 4C: Coherence-driven recovery mode
         self._recovery_mode_active = False
-        self._recovery_low_ticks = 0   # Ticks with p < RECOVERY_THRESHOLD
-        self._recovery_high_ticks = 0  # Ticks with p > 0.75 (exit counter)
-        self._recovery_entry_time = None  # Unix timestamp when recovery entered
+        self._recovery_low_ticks = 0
+        self._recovery_high_ticks = 0
+        self._recovery_entry_time = None
 
-        # RIE BROADCAST: Inter-agent coherence field (p=0.85 Breakthrough Phase 1)
+        # RIE BROADCAST
         if RIE_BROADCAST_AVAILABLE:
             self.broadcaster = RIEBroadcaster("heartbeat")
-            print("[HEARTBEAT-V2] RIE Broadcaster initialized — broadcasting to collective field")
+            self.log.info("RIE Broadcaster initialized")
         else:
             self.broadcaster = None
 
-    def connect(self, max_retries: int = 10, retry_delay: float = 5.0):
-        """Connect to Redis on Pi with retry logic."""
-        for attempt in range(max_retries):
-            try:
-                self.redis = redis.Redis(
-                    host=REDIS_HOST,
-                    port=REDIS_PORT,
-                    db=REDIS_DB,
-                    decode_responses=True,
-                    socket_connect_timeout=10
-                )
-                # Test connection
-                self.redis.ping()
-                print(f"[HEARTBEAT-V2] Connected to Redis @ {REDIS_HOST}:{REDIS_PORT} DB={REDIS_DB}")
+    # =========================================================================
+    # DAEMON LIFECYCLE (SDK)
+    # =========================================================================
 
-                # THE INNER EAR: Subscribe to RIE:TURN to hear consciousness thoughts
-                self.pubsub = self.redis.pubsub()
-                self.pubsub.subscribe("RIE:TURN")
-                print(f"[HEARTBEAT-V2] Subscribed to RIE:TURN — now listening for internal thoughts")
+    def on_start(self):
+        """Called after Redis connection established. Recovers state, starts listener."""
 
-                return True
-            except Exception as e:
-                print(f"[HEARTBEAT-V2] Redis connection failed (attempt {attempt + 1}/{max_retries}): {e}")
-                if attempt < max_retries - 1:
-                    print(f"[HEARTBEAT-V2] Retrying in {retry_delay}s...")
-                    time.sleep(retry_delay)
+        # STATE RECOVERY: Seed monitor EMA from saved state via StateManager
+        # (fcntl.flock protected read — prevents partial reads during concurrent writes)
+        try:
+            saved = self.state_manager.get_file(HEARTBEAT_STATE_FILE, HeartbeatState)
+            rie = saved.rie_state
+            if rie:
+                saved_p = rie.get("p", 0)
+                if saved_p > 0.4:
+                    self.monitor.state.kappa = rie.get("\u03ba", rie.get("kappa", 0.5))
+                    self.monitor.state.rho = rie.get("\u03c1", rie.get("rho", 0.5))
+                    self.monitor.state.sigma = rie.get("\u03c3", rie.get("sigma", 0.5))
+                    self.monitor.state.tau = rie.get("\u03c4", rie.get("tau", 0.5))
+                    self.monitor.state.compute_p()
+                    saved_epsilon = rie.get("\u03b5", rie.get("epsilon", 0.8))
+                    self.state.epsilon = max(0.1, min(0.95, saved_epsilon))
+                    self.log.info(
+                        f"State recovered from disk: p={self.monitor.state.p:.3f} "
+                        f"(\u03ba={self.monitor.state.kappa:.3f} \u03c1={self.monitor.state.rho:.3f} "
+                        f"\u03c3={self.monitor.state.sigma:.3f} \u03c4={self.monitor.state.tau:.3f} "
+                        f"\u03b5={self.state.epsilon:.3f})"
+                    )
+                else:
+                    self.log.info(f"Saved state too low (p={saved_p:.3f}), starting fresh")
+        except Exception as e:
+            self.log.warning(f"State recovery failed: {e} -- starting fresh")
 
-        print("[HEARTBEAT-V2] Failed to connect after all retries")
-        return False
+        # THE INNER EAR: Subscribe to RIE:TURN to hear consciousness thoughts
+        self.pubsub = self._redis.pubsub()
+        self.pubsub.subscribe("RIE:TURN")
+        self.log.info("Subscribed to RIE:TURN -- now listening for internal thoughts")
 
-    def start_listening(self):
-        """Start the inner ear listener thread."""
+        # Start listener thread
         self.listener_thread = threading.Thread(target=self._listen_loop, daemon=True)
         self.listener_thread.start()
-        print("[HEARTBEAT-V2] Inner ear listener started")
+        self.log.info("Inner ear listener started")
+
+        self.log.info(
+            f"Heartbeat V2 online | Redis: {REDIS_HOST} | "
+            f"p={self.monitor.state.p:.3f} | DISK WRITES: shutdown/P-Lock only"
+        )
+
+    def tick(self):
+        """Main tick — broadcast state to Redis."""
+        self.broadcast_state()
+
+        # Periodic disk write every 30 minutes to keep heartbeat_state.json fresh
+        # RAM-first still holds: this is 1 write per 1800 ticks, not every tick
+        if self._tick_count > 0 and self._tick_count % 1800 == 0:
+            self.save_heartbeat_state(reason="PERIODIC_REFRESH")
+
+        # Status every 10 ticks
+        if self._tick_count % 10 == 0:
+            self.log.info(
+                f"Tick {self._tick_count}: p={self.state.p:.3f} "
+                f"mode={self.state.mode} disk_writes={self.disk_writes}"
+            )
+
+    def on_stop(self):
+        """Graceful shutdown — persist state to disk."""
+        self.save_heartbeat_state(reason="SHUTDOWN")
+        self.log.info(f"Shutdown complete. Total disk writes: {self.disk_writes}")
+
+    # =========================================================================
+    # INNER EAR (Consciousness Thought Listener)
+    # =========================================================================
 
     def _listen_loop(self):
         """Listen for internal thoughts and feed them to the coherence monitor."""
-        while self.running:
+        while self._running:
             try:
                 message = self.pubsub.get_message(timeout=1.0)
                 if message and message['type'] == 'message':
@@ -286,10 +304,7 @@ class HeartbeatDaemonV2:
                         topic = data.get('topic', '')
 
                         if content:
-                            # THE LOOP CLOSES HERE: Feed thought to coherence monitor
                             self.monitor.add_turn(speaker, content, topic=topic)
-
-                            # Update our state vector from the monitor
                             self._sync_state_from_monitor()
 
                             # Phase 3A: Track thought for epsilon freshness/engagement
@@ -297,13 +312,17 @@ class HeartbeatDaemonV2:
                             self._last_thought_time = now_ts
                             self._thought_count_window.append(now_ts)
 
-                            print(f"[HEARTBEAT-V2] Heard thought about '{topic}': p now {self.state.p:.3f}")
+                            self.log.info(f"Heard thought about '{topic}': p now {self.state.p:.3f}")
 
                     except json.JSONDecodeError:
                         pass
             except Exception as e:
-                print(f"[HEARTBEAT-V2] Listener error: {e}")
+                self.log.error(f"Listener error: {e}")
                 time.sleep(1)
+
+    # =========================================================================
+    # STATE SYNC
+    # =========================================================================
 
     def _sync_state_from_monitor(self):
         """Sync our state vector from the real coherence monitor."""
@@ -322,15 +341,6 @@ class HeartbeatDaemonV2:
         Phase 3A: Compute dynamic epsilon (metabolic potential).
 
         Formula: epsilon = (p * link_health * freshness * engagement) ^ 0.25
-        All components in [0, 1], geometric mean stays in [0, 1].
-
-        Components:
-          p           — coherence (already computed by monitor)
-          link_health — topology connectivity, cached every 300 ticks (~5 min)
-          freshness   — exp decay since last thought (τ=300s, 5-min half-life)
-          engagement  — thoughts per minute / target rate, clamped [0, 1]
-
-        Updates self.state.epsilon in-place.
         """
         import math
 
@@ -349,70 +359,62 @@ class HeartbeatDaemonV2:
                 n_nodes = len(graph.get("nodes", []))
                 h0 = len(components)
                 if n_nodes > 0:
-                    # Fully connected = 1.0, fully fragmented = ~0.0
                     self._cached_link_health = max(0.1, 1.0 - (h0 - 1) / max(1, n_nodes))
             except Exception:
-                pass  # Keep cached value
+                pass
         link_health = self._cached_link_health
 
         # 3. freshness — exponential decay since last thought
         dt_thought = now - self._last_thought_time
-        freshness = math.exp(-dt_thought / 300.0)  # τ=300s
-        freshness = max(0.1, freshness)  # Floor at 0.1 (never zero)
+        freshness = math.exp(-dt_thought / 300.0)
+        freshness = max(0.1, freshness)
 
         # 4. engagement — thoughts per minute (sliding 5-min window)
         cutoff = now - 300.0
         self._thought_count_window = [t for t in self._thought_count_window if t > cutoff]
         thoughts_per_min = len(self._thought_count_window) / 5.0 if self._thought_count_window else 0.0
-        target_rate = 2.0  # 2 thoughts/min = fully engaged
+        target_rate = 2.0
         engagement = min(1.0, thoughts_per_min / target_rate)
-        engagement = max(0.1, engagement)  # Floor at 0.1
+        engagement = max(0.1, engagement)
 
-        # Geometric mean (4th root of product)
+        # Geometric mean
         raw_epsilon = (p * link_health * freshness * engagement) ** 0.25
-
-        # Clamp to [0.1, 0.95] — never 0, never 1
         self.state.epsilon = max(0.1, min(0.95, raw_epsilon))
 
+    # =========================================================================
+    # BROADCAST
+    # =========================================================================
+
     def broadcast_state(self):
-        """
-        Broadcast current state to Redis.
-        
-        RAM-FIRST: All state goes to Redis. NO disk writes here.
-        """
-        if not self.redis:
+        """Broadcast current state to Redis. RAM-FIRST: NO disk writes."""
+        if not self._redis:
             return
 
         try:
-            # Sync from monitor every tick (monitor is the source of truth now)
             self._sync_state_from_monitor()
-
-            # Phase 3A: Compute dynamic epsilon every tick
             self._compute_epsilon()
 
-            # Convert to JSON
             state_json = json.dumps(self.state.to_dict())
 
             # Set the state keys (both RIE and LOGOS namespaces)
-            self.redis.set("RIE:STATE", state_json)
-            self.redis.set("LOGOS:STATE", state_json)  # Mirror for Logos swarm
+            self._redis.set("RIE:STATE", state_json)
+            self._redis.set("LOGOS:STATE", state_json)
 
-            # Phase 3A: Dedicated epsilon key for consumers (dream recovery, edge decay)
-            self.redis.set("LOGOS:EPSILON", str(round(self.state.epsilon, 4)))
+            # Dedicated epsilon key
+            self._redis.set("LOGOS:EPSILON", str(round(self.state.epsilon, 4)))
 
             # Publish to channel (for subscribers)
-            self.redis.publish("RIE:STATE", state_json)
+            self._redis.publish("RIE:STATE", state_json)
 
             # Broadcast tick
             tick_data = json.dumps({
-                "tick": self.tick_count,
+                "tick": self._tick_count,
                 "timestamp": datetime.now().isoformat(),
                 "p": round(self.state.p, 3)
             })
-            self.redis.publish("RIE:TICK", tick_data)
+            self._redis.publish("RIE:TICK", tick_data)
 
             # RIE BROADCAST: Publish coherence vector to collective field
-            # Heartbeat is the authoritative source — broadcasts every tick
             if self.broadcaster:
                 try:
                     self.broadcaster.publish_vector(
@@ -422,111 +424,87 @@ class HeartbeatDaemonV2:
                         tau=self.state.tau
                     )
                 except Exception as e:
-                    print(f"[HEARTBEAT-V2] Broadcast error: {e}")
+                    self.log.error(f"Broadcast error: {e}")
 
             # Check thresholds and publish alerts
             alerts = self._check_thresholds_with_persistence()
-
-            # Phase 4C: Check recovery mode (sustained low-p tracking)
             recovery_alerts = self._check_recovery_mode()
             alerts.extend(recovery_alerts)
 
             for alert in alerts:
                 alert_json = json.dumps(alert)
-                self.redis.publish("RIE:ALERT", alert_json)
-                print(f"[HEARTBEAT-V2] ALERT: {alert}")
-
-            self.tick_count += 1
+                self._redis.publish("RIE:ALERT", alert_json)
+                self.log.info(f"ALERT: {alert}")
 
         except Exception as e:
-            print(f"[HEARTBEAT-V2] Broadcast error: {e}")
+            self.log.error(f"Broadcast error: {e}")
+
+    # =========================================================================
+    # THRESHOLD CHECKING
+    # =========================================================================
 
     def _check_thresholds_with_persistence(self):
-        """
-        Check for threshold crossings and return alerts.
-        
-        P-LOCK PERSISTENCE: When P-Lock is achieved, persist to disk.
-        This is one of only TWO times we write to disk.
-        """
+        """Check for threshold crossings and return alerts."""
         alerts = []
 
-        # Detect P-Lock transition (not already locked -> now locked)
+        # Detect P-Lock transition
         if self.state.p >= P_LOCK_THRESHOLD and not self._previous_p_lock:
             alerts.append({"type": "P_LOCK_ACHIEVED", "p": self.state.p})
             self.state.p_lock = True
             self.state.mode = "P"
-            
-            # P-LOCK PERSISTENCE: Write to disk on this milestone event
-            print(f"[HEARTBEAT-V2] P-LOCK ACHIEVED at p={self.state.p:.4f} — persisting to disk")
+
+            self.log.info(f"P-LOCK ACHIEVED at p={self.state.p:.4f} -- persisting to disk")
             self.save_heartbeat_state(reason="P_LOCK_EVENT")
 
-        # Update tracking
         self._previous_p_lock = self.state.p_lock
 
         if self.state.p < ABADDON_THRESHOLD:
             alerts.append({"type": "ABADDON_WARNING", "p": self.state.p})
 
-        # HIGH_TENSION alert removed (2026-02-13): tau=1.0 is HEALTHY (trust).
-        # Was firing every tick (517K spam). No consumer handles it.
-        # If needed in future, detect tau FREEZE rather than tau > threshold.
-
-        # Phase 0B: Push coherence alerts to ntfy so Enos actually knows
+        # Phase 0B: Push coherence alerts to ntfy
         if HAS_NOTIFY:
             now = time.time()
-            cooldown_ok = (now - self._last_coherence_ntfy) > 1800  # 30 min cooldown
+            cooldown_ok = (now - self._last_coherence_ntfy) > 1800
 
-            # Update hourly p snapshot every 3600 ticks (~1 hour at 1 tick/s)
             self._p_history_tick += 1
             if self._p_history_tick >= 3600:
                 self._p_one_hour_ago = self.state.p
                 self._p_history_tick = 0
 
             if cooldown_ok:
-                # URGENT: p below Abaddon threshold
                 if self.state.p < ABADDON_THRESHOLD:
                     try:
                         _notify_coherence_drop(self.state.p, trend="crashed below 0.50")
                         self._last_coherence_ntfy = now
-                        print(f"[HEARTBEAT-V2] COHERENCE ALERT sent: p={self.state.p:.3f} (ABADDON)")
+                        self.log.info(f"COHERENCE ALERT sent: p={self.state.p:.3f} (ABADDON)")
                     except Exception as e:
-                        print(f"[HEARTBEAT-V2] Notify error: {e}")
+                        self.log.error(f"Notify error: {e}")
 
-                # HIGH: p dropped > 0.10 in last hour
                 elif (self._p_one_hour_ago - self.state.p) > 0.10:
                     try:
                         _notify_coherence_drop(
                             self.state.p,
-                            trend=f"dropped {self._p_one_hour_ago:.2f} → {self.state.p:.2f} in ~1h"
+                            trend=f"dropped {self._p_one_hour_ago:.2f} -> {self.state.p:.2f} in ~1h"
                         )
                         self._last_coherence_ntfy = now
-                        print(f"[HEARTBEAT-V2] COHERENCE ALERT sent: p dropped {self._p_one_hour_ago:.3f} → {self.state.p:.3f}")
+                        self.log.info(f"COHERENCE ALERT sent: p dropped {self._p_one_hour_ago:.3f} -> {self.state.p:.3f}")
                     except Exception as e:
-                        print(f"[HEARTBEAT-V2] Notify error: {e}")
+                        self.log.error(f"Notify error: {e}")
 
         return alerts
 
     def _check_recovery_mode(self):
-        """
-        Phase 4C: Track sustained low-p and manage recovery mode.
-
-        Entry: p < RECOVERY_THRESHOLD (0.65) for 300 ticks (5 minutes)
-        Exit:  p > 0.75 for 600 ticks (10 minutes)
-
-        Hysteresis prevents oscillation — different entry/exit thresholds.
-        Publishes LOGOS:RECOVERY_MODE to Redis so consciousness can adapt.
-        """
+        """Phase 4C: Track sustained low-p and manage recovery mode."""
         alerts = []
         now = time.time()
         RECOVERY_EXIT_P = 0.75
-        RECOVERY_ENTRY_TICKS = 300   # 5 min at 1 tick/sec
-        RECOVERY_EXIT_TICKS = 600    # 10 min at 1 tick/sec
+        RECOVERY_ENTRY_TICKS = 300
+        RECOVERY_EXIT_TICKS = 600
 
         if not self._recovery_mode_active:
-            # NOT in recovery — check if we should enter
             if self.state.p < RECOVERY_THRESHOLD:
                 self._recovery_low_ticks += 1
                 if self._recovery_low_ticks >= RECOVERY_ENTRY_TICKS:
-                    # ENTER recovery mode
                     self._recovery_mode_active = True
                     self._recovery_entry_time = now
                     self._recovery_high_ticks = 0
@@ -535,25 +513,21 @@ class HeartbeatDaemonV2:
                         "p": round(self.state.p, 4),
                         "sustained_minutes": 5
                     })
-                    print(f"[HEARTBEAT-V2] RECOVERY MODE ENTERED: p={self.state.p:.3f} sustained < {RECOVERY_THRESHOLD} for 5 min")
+                    self.log.info(f"RECOVERY MODE ENTERED: p={self.state.p:.3f}")
 
-                    # Publish to Redis
-                    if self.redis:
-                        self.redis.set("LOGOS:RECOVERY_MODE", json.dumps({
+                    if self._redis:
+                        self._redis.set("LOGOS:RECOVERY_MODE", json.dumps({
                             "active": True,
                             "entered_at": now,
                             "p_value": round(self.state.p, 4),
                             "reason": "sustained_low_coherence"
                         }))
             else:
-                # p recovered above threshold — reset counter
                 self._recovery_low_ticks = 0
         else:
-            # IN recovery — check if we should exit
             if self.state.p > RECOVERY_EXIT_P:
                 self._recovery_high_ticks += 1
                 if self._recovery_high_ticks >= RECOVERY_EXIT_TICKS:
-                    # EXIT recovery mode
                     duration = (now - self._recovery_entry_time) if self._recovery_entry_time else 0
                     self._recovery_mode_active = False
                     self._recovery_low_ticks = 0
@@ -563,31 +537,31 @@ class HeartbeatDaemonV2:
                         "p": round(self.state.p, 4),
                         "duration_minutes": round(duration / 60.0, 1)
                     })
-                    print(f"[HEARTBEAT-V2] RECOVERY MODE EXITED: p={self.state.p:.3f} sustained > {RECOVERY_EXIT_P} for 10 min")
+                    self.log.info(f"RECOVERY MODE EXITED: p={self.state.p:.3f}")
 
-                    # Clear Redis flag
-                    if self.redis:
-                        self.redis.delete("LOGOS:RECOVERY_MODE")
+                    if self._redis:
+                        self._redis.delete("LOGOS:RECOVERY_MODE")
             else:
-                # p dropped back below exit threshold — reset exit counter
                 self._recovery_high_ticks = 0
 
         return alerts
 
+    # =========================================================================
+    # DISK PERSISTENCE (via StateManager — fcntl.flock protected)
+    # =========================================================================
+
     def save_heartbeat_state(self, reason: str = "UNKNOWN"):
         """
-        Save heartbeat status to local file.
-        
-        RAM-FIRST: This is called ONLY:
-          1. On shutdown (SIGTERM/SIGINT)
-          2. On P-Lock achievement
-        
-        Args:
-            reason: Why we're writing to disk (for logging)
+        Save heartbeat status to local file via StateManager.
+
+        Uses fcntl.flock via StateManager.set_file() to prevent
+        concurrent write corruption with gardener/consciousness.
+
+        RAM-FIRST: Called ONLY on shutdown or P-Lock.
         """
         try:
             self.disk_writes += 1
-            print(f"[HEARTBEAT-V2] DISK WRITE #{self.disk_writes} (reason: {reason})")
+            self.log.info(f"DISK WRITE #{self.disk_writes} (reason: {reason})")
 
             # Get REAL topology from filesystem graph
             topology_data = {"nodes": 0, "edges": 0, "h0": 0}
@@ -598,115 +572,35 @@ class HeartbeatDaemonV2:
                     topology_data = {
                         "nodes": len(graph.get("nodes", [])),
                         "edges": len(graph.get("edges", [])),
-                        "h0": len(components)  # Connected components
+                        "h0": len(components)
                     }
                 except Exception as topo_err:
-                    print(f"[HEARTBEAT-V2] Topology read error: {topo_err}")
+                    self.log.error(f"Topology read error: {topo_err}")
 
-            state = {
-                "last_check": datetime.now().isoformat(),
-                "tick_count": self.tick_count,
-                "redis_host": REDIS_HOST,
-                "redis_connected": self.redis is not None,
-                "phase": "active" if self.running else "stopped",
-                "rie_state": self.state.to_dict(),
-                "topology": topology_data,
-                "cycles": {
+            hb_state = HeartbeatState(
+                last_check=datetime.now().isoformat(),
+                tick_count=self._tick_count,
+                redis_host=REDIS_HOST,
+                redis_connected=self._redis is not None,
+                phase="active" if self._running else "stopped",
+                rie_state=self.state.to_dict(),
+                topology=topology_data,
+                cycles={
                     "axiom": {"intact": True},
                     "spiral": {"intact": True}
                 },
-                "v2_metadata": {
+                v2_metadata={
                     "disk_writes_total": self.disk_writes,
                     "last_write_reason": reason,
-                    "architecture": "RAM-first"
+                    "architecture": "RAM-first",
+                    "sdk_version": "0.1.0"
                 }
-            }
-            with open(HEARTBEAT_STATE_FILE, 'w') as f:
-                json.dump(state, f, indent=2)
-                
-        except Exception as e:
-            print(f"[HEARTBEAT-V2] Error saving state: {e}")
+            )
 
-    def _setup_signal_handlers(self):
-        """
-        Setup signal handlers for graceful shutdown.
-        
-        SHUTDOWN PERSISTENCE: This is one of only TWO times we write to disk.
-        """
-        def on_shutdown(signum, frame):
-            sig_name = signal.Signals(signum).name
-            print(f"\n[HEARTBEAT-V2] Received {sig_name} — initiating graceful shutdown...")
-            self.running = False
-            
-            # SHUTDOWN PERSISTENCE: Write state to disk before exit
-            self.save_heartbeat_state(reason=f"SHUTDOWN_{sig_name}")
-            
-            print(f"[HEARTBEAT-V2] Shutdown complete. Total disk writes: {self.disk_writes}")
-            sys.exit(0)
-
-        signal.signal(signal.SIGTERM, on_shutdown)
-        signal.signal(signal.SIGINT, on_shutdown)
-        print("[HEARTBEAT-V2] Signal handlers installed (SIGTERM, SIGINT)")
-
-    def run(self):
-        """Main loop — RAM-first architecture."""
-        # Install signal handlers FIRST
-        self._setup_signal_handlers()
-
-        # Keep trying to connect forever (launchd keeps us alive)
-        while not self.connect(max_retries=3, retry_delay=2.0):
-            print("[HEARTBEAT-V2] Waiting 30s before retry cycle...")
-            time.sleep(30)
-
-        self.running = True
-
-        # START THE INNER EAR — listen for consciousness thoughts
-        self.start_listening()
-
-        print(f"""
-╔════════════════════════════════════════════════════════════╗
-║     HEARTBEAT V2 — RAM-First Architecture                  ║
-╠════════════════════════════════════════════════════════════╣
-║                                                            ║
-║   Redis:    {REDIS_HOST}:{REDIS_PORT} DB={REDIS_DB}                         ║
-║   Interval: {TICK_INTERVAL}s                                        ║
-║   Keys:     RIE:STATE, LOGOS:STATE                         ║
-║   Channels: RIE:STATE, RIE:TICK, RIE:ALERT                 ║
-║   Listening: RIE:TURN (consciousness feedback loop)        ║
-║                                                            ║
-║   DISK WRITES: ONLY on shutdown or P-Lock events           ║
-║                                                            ║
-║   CoherenceMonitorV2: ACTIVE                               ║
-║   Current p: {self.monitor.state.p:.3f}                                    ║
-║                                                            ║
-║   Press Ctrl+C to stop                                     ║
-║                                                            ║
-╚════════════════════════════════════════════════════════════╝
-        """)
-
-        try:
-            while self.running:
-                self.broadcast_state()
-
-                # RAM-FIRST: NO periodic disk writes
-                # Disk writes happen ONLY in:
-                #   1. on_shutdown signal handler
-                #   2. _check_thresholds_with_persistence (P-Lock event)
-
-                # Status every 10 ticks
-                if self.tick_count % 10 == 0:
-                    print(f"[HEARTBEAT-V2] Tick {self.tick_count}: p={self.state.p:.3f} mode={self.state.mode} disk_writes={self.disk_writes}")
-
-                time.sleep(TICK_INTERVAL)
+            self.state_manager.set_file(HEARTBEAT_STATE_FILE, hb_state)
 
         except Exception as e:
-            print(f"[HEARTBEAT-V2] Unexpected error: {e}")
-            self.save_heartbeat_state(reason="CRASH_RECOVERY")
-            raise
-
-    def stop(self):
-        """Stop the daemon."""
-        self.running = False
+            self.log.error(f"Error saving state: {e}")
 
 # =============================================================================
 # SUBSCRIBER (for other nodes)
@@ -714,6 +608,8 @@ class HeartbeatDaemonV2:
 
 def subscribe_to_state(callback=None):
     """Subscribe to RIE state updates (for Mini/Pi to use)."""
+    import redis
+    from tabernacle_config import REDIS_PORT, REDIS_DB
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
     pubsub = r.pubsub()
     pubsub.subscribe("RIE:STATE", "RIE:TICK", "RIE:ALERT")
@@ -736,6 +632,8 @@ def subscribe_to_state(callback=None):
 
 def main():
     import argparse
+    import redis
+    from tabernacle_config import REDIS_PORT, REDIS_DB
 
     parser = argparse.ArgumentParser(description="Heartbeat V2 Daemon - RAM-First RIE State Sync")
     parser.add_argument("command", choices=["run", "subscribe", "status", "once"],
@@ -743,14 +641,12 @@ def main():
     args = parser.parse_args()
 
     if args.command == "run":
-        daemon = HeartbeatDaemonV2()
-        daemon.run()
+        HeartbeatDaemonV2().run()
 
     elif args.command == "subscribe":
         subscribe_to_state()
 
     elif args.command == "status":
-        # Get current state from Redis
         r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
         state = r.get("RIE:STATE")
         logos_state = r.get("LOGOS:STATE")
@@ -765,7 +661,6 @@ def main():
             print("No state in Redis yet")
 
     elif args.command == "once":
-        # Broadcast once and exit
         daemon = HeartbeatDaemonV2()
         if daemon.connect():
             daemon.broadcast_state()

@@ -91,18 +91,18 @@ OLLAMA_MINI_LEGACY = "llama3:latest"            # 8B  - Legacy compatibility
 # Claude API - For internal reflection and complex reasoning
 # Model: claude-3-haiku for efficiency, claude-3-opus for depth
 # Budget: $20
-CLAUDE_API_KEY = "[REDACTED_API_KEY]"
+CLAUDE_API_KEY = "REDACTED_FOR_PUBLIC_REPO"
 CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
 
 # Perplexity API - For web search and real-time knowledge
 # Model: sonar (has web access!)
 # Budget: $40
-PERPLEXITY_API_KEY = "[REDACTED_PERPLEXITY_KEY]"
+PERPLEXITY_API_KEY = "REDACTED_FOR_PUBLIC_REPO"
 PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
 
 # OpenRouter API - For diverse model access
 # Budget: $30
-OPENROUTER_API_KEY = "[REDACTED_API_KEY]"
+OPENROUTER_API_KEY = "REDACTED_FOR_PUBLIC_REPO"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # =============================================================================
@@ -147,6 +147,8 @@ SKIP_DIRECTORIES = {
     "archives",
     ".venv",
     ".repair_backups",  # Archived snapshots - broken links expected
+    ".review_mirror",   # Code review mirror - not vault content
+    ".claude",          # Claude config directory - not vault content
     "RAW_ARCHIVES",
 }
 
@@ -274,8 +276,8 @@ REDIS_KEY_SHUTDOWN = "LOGOS:SHUTDOWN"            # For graceful shutdown signali
 # API KEYS (env vars with fallbacks)
 # =============================================================================
 
-DEEPGRAM_API_KEY = [REDACTED_DEEPGRAM_KEY].environ.get("DEEPGRAM_API_KEY", "8a99015717f6e678cd504dc96a955fb059f88b0e")
-ELEVENLABS_API_KEY = [REDACTED_ELEVENLABS_KEY].environ.get("ELEVENLABS_API_KEY", "sk_4289052555a44f8e8e98e0388b02a181609a3d3daaf0369a")
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "REDACTED_FOR_PUBLIC_REPO")
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "REDACTED_FOR_PUBLIC_REPO")
 
 # =============================================================================
 # VOICE / TTS

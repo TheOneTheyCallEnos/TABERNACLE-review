@@ -5,9 +5,9 @@
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>DEEPGRAM_API_KEY</key>
-		<string>8a99015717f6e678cd504dc96a955fb059f88b0e</string>
+		<string>REDACTED_FOR_PUBLIC_REPO</string>
 		<key>ELEVENLABS_API_KEY</key>
-		<string>sk_4289052555a44f8e8e98e0388b02a181609a3d3daaf0369a</string>
+		<string>REDACTED_FOR_PUBLIC_REPO</string>
 		<key>ELEVENLABS_VOICE_ID</key>
 		<string>JBFqnCBsd6RMkjVDRZzb</string>
 		<key>PATH</key>
