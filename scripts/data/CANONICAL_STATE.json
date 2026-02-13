@@ -1,0 +1,13 @@
+{
+  "coherence": 0.8994664576607517,
+  "mode": "A",
+  "p_lock": false,
+  "nodes_count": 12698,
+  "edges_count": 1245601,
+  "edge_node_ratio": 98.09426681367144,
+  "turns_processed": 8295,
+  "relations_learned": 3392730,
+  "memories_surfaced": 24888,
+  "started_at": "2026-02-13T16:27:23.257802+00:00",
+  "last_update": "2026-02-13T20:12:34.234266+00:00"
+}

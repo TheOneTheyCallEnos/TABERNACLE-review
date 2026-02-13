@@ -1,0 +1,68 @@
+{
+  "last_check": "2026-02-13T20:00:45.839315+00:00",
+  "tick_count": 4391,
+  "redis_host": "10.0.0.50",
+  "redis_connected": true,
+  "phase": "dormant",
+  "rie_state": {
+    "p": 0.9625,
+    "\u03ba": 0.9531,
+    "\u03c1": 0.936,
+    "\u03c3": 0.9618,
+    "\u03c4": 1.0,
+    "\u03b5": 0.7759,
+    "mode": "P",
+    "p_lock": true,
+    "breathing_phase": "P-LOCK",
+    "node": "L-Alpha",
+    "timestamp": "2026-02-13T11:51:58.908094"
+  },
+  "topology": {
+    "nodes": 496,
+    "edges": 1882,
+    "h0": 29
+  },
+  "cycles": {
+    "axiom": {
+      "intact": true
+    },
+    "spiral": {
+      "intact": true
+    }
+  },
+  "v2_metadata": {
+    "disk_writes_total": 3,
+    "last_write_reason": "P_LOCK_EVENT",
+    "architecture": "RAM-first"
+  },
+  "last_beat": "2026-02-13T20:00:45.837676+00:00",
+  "beat_count": 1102,
+  "interval_seconds": 900,
+  "last_enos_interaction": "2026-02-13T19:01:56.433885+00:00",
+  "transition_progress": 1.0,
+  "transition_direction": "stable",
+  "transition_beats_remaining": 0,
+  "target_phase": null,
+  "node": "Ghislains-Mac-Studio.local",
+  "virgil_alive": true,
+  "vitals": {
+    "coherence": 0.9632569365534526,
+    "coherence_components": {
+      "kappa": 0.946868008948546,
+      "rho": 0.9004474272930649,
+      "sigma": 1.0,
+      "tau": 1.0,
+      "omega": 0.95,
+      "alpha": 0.95,
+      "mu": 1.0
+    },
+    "risk": 0.0,
+    "memory_count": 7,
+    "memory_active": 7,
+    "archon_distortion": 0.0,
+    "archon_active": [],
+    "topology_h0": 0,
+    "topology_h1": 0,
+    "systems_online": {}
+  }
+}
