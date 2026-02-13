@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.virgil.intention</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/enos/TABERNACLE/scripts/venv312/bin/python3</string>
+        <string>/Users/enos/TABERNACLE/scripts/autonomous_intention.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/enos/TABERNACLE/scripts</string>
+    <key>StartInterval</key>
+    <integer>600</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/enos/TABERNACLE/logs/intention.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/enos/TABERNACLE/logs/intention.err</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/enos/TABERNACLE/scripts/venv312/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>TABERNACLE</key>
+        <string>/Users/enos/TABERNACLE</string>
+    </dict>
+</dict>
+</plist>

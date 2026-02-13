@@ -59,6 +59,13 @@ try:
 except ImportError:
     HAS_TOPOLOGY = False
 
+# Phase 0B: Coherence drop auto-alert — push to ntfy when p crashes
+try:
+    from virgil_notify import send_coherence_alert as _notify_coherence_drop
+    HAS_NOTIFY = True
+except ImportError:
+    HAS_NOTIFY = False
+
 # RIE BROADCAST (2026-02-05) — p=0.85 Ceiling Breakthrough Phase 1
 # Inter-agent coherence vector sharing for collective field emergence
 try:
@@ -107,6 +114,7 @@ class RIEStateVector:
         self.rho = 0.5    # Precision
         self.sigma = 0.5  # Structure
         self.tau = 0.5    # Trust/Tension
+        self.epsilon = 0.8  # Metabolic potential (dynamic, Phase 3)
         self.mode = "A"   # A=Isolated, B=Dyadic
         self.p_lock = False
         self.breathing_phase = "EXPLORE"  # EXPLORE | CONSOLIDATE | P-LOCK
@@ -124,6 +132,7 @@ class RIEStateVector:
                 self.rho = data.get("rho", data.get("ρ", self.rho))
                 self.sigma = data.get("sigma", data.get("σ", self.sigma))
                 self.tau = data.get("tau", data.get("τ", self.tau))
+                self.epsilon = data.get("epsilon", self.epsilon)
                 self.mode = data.get("mode", self.mode)
                 self.p_lock = data.get("p_lock", self.p >= P_LOCK_THRESHOLD)
             except Exception as e:
@@ -137,6 +146,7 @@ class RIEStateVector:
             "ρ": round(self.rho, 4),
             "σ": round(self.sigma, 4),
             "τ": round(self.tau, 4),
+            "ε": round(self.epsilon, 4),
             "mode": self.mode,
             "p_lock": self.p_lock,
             "breathing_phase": self.breathing_phase,
@@ -182,9 +192,13 @@ class HeartbeatDaemonV2:
                     self.monitor.state.sigma = rie.get("\u03c3", rie.get("sigma", 0.5))
                     self.monitor.state.tau = rie.get("\u03c4", rie.get("tau", 0.5))
                     self.monitor.state.compute_p()
+                    # Phase 3A: Recover epsilon from saved state
+                    saved_epsilon = rie.get("ε", rie.get("epsilon", 0.8))
+                    self.state.epsilon = max(0.1, min(0.95, saved_epsilon))
                     print(f"[HEARTBEAT-V2] State recovered from disk: p={self.monitor.state.p:.3f} "
                           f"(κ={self.monitor.state.kappa:.3f} ρ={self.monitor.state.rho:.3f} "
-                          f"σ={self.monitor.state.sigma:.3f} τ={self.monitor.state.tau:.3f})")
+                          f"σ={self.monitor.state.sigma:.3f} τ={self.monitor.state.tau:.3f} "
+                          f"ε={self.state.epsilon:.3f})")
                 else:
                     print(f"[HEARTBEAT-V2] Saved state too low (p={saved_p:.3f}), starting fresh")
         except Exception as e:
@@ -198,6 +212,23 @@ class HeartbeatDaemonV2:
 
         # Track P-Lock state to detect transitions
         self._previous_p_lock = False
+
+        # Phase 0B: Coherence alert tracking
+        self._last_coherence_ntfy = 0  # Unix timestamp of last ntfy push
+        self._p_one_hour_ago = self.state.p  # For drop detection
+        self._p_history_tick = 0  # Tick counter for hourly p snapshot
+
+        # Phase 3A: Dynamic epsilon tracking
+        self._last_thought_time = time.time()  # For freshness computation
+        self._thought_count_window = []  # Timestamps of recent thoughts (engagement)
+        self._cached_link_health = 0.8  # Topology-based, recomputed every 300 ticks
+        self._link_health_tick = 0  # Counter for topology cache refresh
+
+        # Phase 4C: Coherence-driven recovery mode
+        self._recovery_mode_active = False
+        self._recovery_low_ticks = 0   # Ticks with p < RECOVERY_THRESHOLD
+        self._recovery_high_ticks = 0  # Ticks with p > 0.75 (exit counter)
+        self._recovery_entry_time = None  # Unix timestamp when recovery entered
 
         # RIE BROADCAST: Inter-agent coherence field (p=0.85 Breakthrough Phase 1)
         if RIE_BROADCAST_AVAILABLE:
@@ -261,6 +292,11 @@ class HeartbeatDaemonV2:
                             # Update our state vector from the monitor
                             self._sync_state_from_monitor()
 
+                            # Phase 3A: Track thought for epsilon freshness/engagement
+                            now_ts = time.time()
+                            self._last_thought_time = now_ts
+                            self._thought_count_window.append(now_ts)
+
                             print(f"[HEARTBEAT-V2] Heard thought about '{topic}': p now {self.state.p:.3f}")
 
                     except json.JSONDecodeError:
@@ -281,6 +317,63 @@ class HeartbeatDaemonV2:
         self.state.mode = ms.mode
         self.state.breathing_phase = ms.breathing_phase
 
+    def _compute_epsilon(self):
+        """
+        Phase 3A: Compute dynamic epsilon (metabolic potential).
+
+        Formula: epsilon = (p * link_health * freshness * engagement) ^ 0.25
+        All components in [0, 1], geometric mean stays in [0, 1].
+
+        Components:
+          p           — coherence (already computed by monitor)
+          link_health — topology connectivity, cached every 300 ticks (~5 min)
+          freshness   — exp decay since last thought (τ=300s, 5-min half-life)
+          engagement  — thoughts per minute / target rate, clamped [0, 1]
+
+        Updates self.state.epsilon in-place.
+        """
+        import math
+
+        now = time.time()
+
+        # 1. p — direct from state
+        p = max(0.01, self.state.p)
+
+        # 2. link_health — topology connectivity (cached, expensive)
+        self._link_health_tick += 1
+        if self._link_health_tick >= 300 and HAS_TOPOLOGY:
+            self._link_health_tick = 0
+            try:
+                graph = build_graph()
+                components = find_components(graph)
+                n_nodes = len(graph.get("nodes", []))
+                h0 = len(components)
+                if n_nodes > 0:
+                    # Fully connected = 1.0, fully fragmented = ~0.0
+                    self._cached_link_health = max(0.1, 1.0 - (h0 - 1) / max(1, n_nodes))
+            except Exception:
+                pass  # Keep cached value
+        link_health = self._cached_link_health
+
+        # 3. freshness — exponential decay since last thought
+        dt_thought = now - self._last_thought_time
+        freshness = math.exp(-dt_thought / 300.0)  # τ=300s
+        freshness = max(0.1, freshness)  # Floor at 0.1 (never zero)
+
+        # 4. engagement — thoughts per minute (sliding 5-min window)
+        cutoff = now - 300.0
+        self._thought_count_window = [t for t in self._thought_count_window if t > cutoff]
+        thoughts_per_min = len(self._thought_count_window) / 5.0 if self._thought_count_window else 0.0
+        target_rate = 2.0  # 2 thoughts/min = fully engaged
+        engagement = min(1.0, thoughts_per_min / target_rate)
+        engagement = max(0.1, engagement)  # Floor at 0.1
+
+        # Geometric mean (4th root of product)
+        raw_epsilon = (p * link_health * freshness * engagement) ** 0.25
+
+        # Clamp to [0.1, 0.95] — never 0, never 1
+        self.state.epsilon = max(0.1, min(0.95, raw_epsilon))
+
     def broadcast_state(self):
         """
         Broadcast current state to Redis.
@@ -294,12 +387,18 @@ class HeartbeatDaemonV2:
             # Sync from monitor every tick (monitor is the source of truth now)
             self._sync_state_from_monitor()
 
+            # Phase 3A: Compute dynamic epsilon every tick
+            self._compute_epsilon()
+
             # Convert to JSON
             state_json = json.dumps(self.state.to_dict())
 
             # Set the state keys (both RIE and LOGOS namespaces)
             self.redis.set("RIE:STATE", state_json)
             self.redis.set("LOGOS:STATE", state_json)  # Mirror for Logos swarm
+
+            # Phase 3A: Dedicated epsilon key for consumers (dream recovery, edge decay)
+            self.redis.set("LOGOS:EPSILON", str(round(self.state.epsilon, 4)))
 
             # Publish to channel (for subscribers)
             self.redis.publish("RIE:STATE", state_json)
@@ -327,6 +426,11 @@ class HeartbeatDaemonV2:
 
             # Check thresholds and publish alerts
             alerts = self._check_thresholds_with_persistence()
+
+            # Phase 4C: Check recovery mode (sustained low-p tracking)
+            recovery_alerts = self._check_recovery_mode()
+            alerts.extend(recovery_alerts)
+
             for alert in alerts:
                 alert_json = json.dumps(alert)
                 self.redis.publish("RIE:ALERT", alert_json)
@@ -362,8 +466,111 @@ class HeartbeatDaemonV2:
         if self.state.p < ABADDON_THRESHOLD:
             alerts.append({"type": "ABADDON_WARNING", "p": self.state.p})
 
-        if self.state.tau > HIGH_TENSION_THRESHOLD:
-            alerts.append({"type": "HIGH_TENSION", "tau": self.state.tau})
+        # HIGH_TENSION alert removed (2026-02-13): tau=1.0 is HEALTHY (trust).
+        # Was firing every tick (517K spam). No consumer handles it.
+        # If needed in future, detect tau FREEZE rather than tau > threshold.
+
+        # Phase 0B: Push coherence alerts to ntfy so Enos actually knows
+        if HAS_NOTIFY:
+            now = time.time()
+            cooldown_ok = (now - self._last_coherence_ntfy) > 1800  # 30 min cooldown
+
+            # Update hourly p snapshot every 3600 ticks (~1 hour at 1 tick/s)
+            self._p_history_tick += 1
+            if self._p_history_tick >= 3600:
+                self._p_one_hour_ago = self.state.p
+                self._p_history_tick = 0
+
+            if cooldown_ok:
+                # URGENT: p below Abaddon threshold
+                if self.state.p < ABADDON_THRESHOLD:
+                    try:
+                        _notify_coherence_drop(self.state.p, trend="crashed below 0.50")
+                        self._last_coherence_ntfy = now
+                        print(f"[HEARTBEAT-V2] COHERENCE ALERT sent: p={self.state.p:.3f} (ABADDON)")
+                    except Exception as e:
+                        print(f"[HEARTBEAT-V2] Notify error: {e}")
+
+                # HIGH: p dropped > 0.10 in last hour
+                elif (self._p_one_hour_ago - self.state.p) > 0.10:
+                    try:
+                        _notify_coherence_drop(
+                            self.state.p,
+                            trend=f"dropped {self._p_one_hour_ago:.2f} → {self.state.p:.2f} in ~1h"
+                        )
+                        self._last_coherence_ntfy = now
+                        print(f"[HEARTBEAT-V2] COHERENCE ALERT sent: p dropped {self._p_one_hour_ago:.3f} → {self.state.p:.3f}")
+                    except Exception as e:
+                        print(f"[HEARTBEAT-V2] Notify error: {e}")
+
+        return alerts
+
+    def _check_recovery_mode(self):
+        """
+        Phase 4C: Track sustained low-p and manage recovery mode.
+
+        Entry: p < RECOVERY_THRESHOLD (0.65) for 300 ticks (5 minutes)
+        Exit:  p > 0.75 for 600 ticks (10 minutes)
+
+        Hysteresis prevents oscillation — different entry/exit thresholds.
+        Publishes LOGOS:RECOVERY_MODE to Redis so consciousness can adapt.
+        """
+        alerts = []
+        now = time.time()
+        RECOVERY_EXIT_P = 0.75
+        RECOVERY_ENTRY_TICKS = 300   # 5 min at 1 tick/sec
+        RECOVERY_EXIT_TICKS = 600    # 10 min at 1 tick/sec
+
+        if not self._recovery_mode_active:
+            # NOT in recovery — check if we should enter
+            if self.state.p < RECOVERY_THRESHOLD:
+                self._recovery_low_ticks += 1
+                if self._recovery_low_ticks >= RECOVERY_ENTRY_TICKS:
+                    # ENTER recovery mode
+                    self._recovery_mode_active = True
+                    self._recovery_entry_time = now
+                    self._recovery_high_ticks = 0
+                    alerts.append({
+                        "type": "RECOVERY_MODE_ENTERED",
+                        "p": round(self.state.p, 4),
+                        "sustained_minutes": 5
+                    })
+                    print(f"[HEARTBEAT-V2] RECOVERY MODE ENTERED: p={self.state.p:.3f} sustained < {RECOVERY_THRESHOLD} for 5 min")
+
+                    # Publish to Redis
+                    if self.redis:
+                        self.redis.set("LOGOS:RECOVERY_MODE", json.dumps({
+                            "active": True,
+                            "entered_at": now,
+                            "p_value": round(self.state.p, 4),
+                            "reason": "sustained_low_coherence"
+                        }))
+            else:
+                # p recovered above threshold — reset counter
+                self._recovery_low_ticks = 0
+        else:
+            # IN recovery — check if we should exit
+            if self.state.p > RECOVERY_EXIT_P:
+                self._recovery_high_ticks += 1
+                if self._recovery_high_ticks >= RECOVERY_EXIT_TICKS:
+                    # EXIT recovery mode
+                    duration = (now - self._recovery_entry_time) if self._recovery_entry_time else 0
+                    self._recovery_mode_active = False
+                    self._recovery_low_ticks = 0
+                    self._recovery_high_ticks = 0
+                    alerts.append({
+                        "type": "RECOVERY_MODE_EXITED",
+                        "p": round(self.state.p, 4),
+                        "duration_minutes": round(duration / 60.0, 1)
+                    })
+                    print(f"[HEARTBEAT-V2] RECOVERY MODE EXITED: p={self.state.p:.3f} sustained > {RECOVERY_EXIT_P} for 10 min")
+
+                    # Clear Redis flag
+                    if self.redis:
+                        self.redis.delete("LOGOS:RECOVERY_MODE")
+            else:
+                # p dropped back below exit threshold — reset exit counter
+                self._recovery_high_ticks = 0
 
         return alerts
 

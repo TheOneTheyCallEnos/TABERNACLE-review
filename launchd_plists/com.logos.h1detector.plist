@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.logos.h1detector</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/enos/TABERNACLE/scripts/venv312/bin/python</string>
+        <string>/Users/enos/TABERNACLE/scripts/h1_detector.py</string>
+        <string>run</string>
+    </array>
+    
+    <key>WorkingDirectory</key>
+    <string>/Users/enos/TABERNACLE/scripts</string>
+    
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <key>KeepAlive</key>
+    <true/>
+    
+    <key>StandardOutPath</key>
+    <string>/Users/enos/TABERNACLE/logs/h1_detector.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/Users/enos/TABERNACLE/logs/h1_detector.err</string>
+    
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    
+    <key>ProcessType</key>
+    <string>Background</string>
+    
+    <key>LowPriorityIO</key>
+    <true/>
+    
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>

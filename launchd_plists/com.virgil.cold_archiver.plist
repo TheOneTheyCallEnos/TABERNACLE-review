@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.virgil.cold_archiver</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/enos/TABERNACLE/scripts/venv312/bin/python3</string>
+        <string>/Users/enos/TABERNACLE/scripts/cold_archiver.py</string>
+        <string>daily</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/enos/TABERNACLE/logs/cold_archiver_launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/enos/TABERNACLE/logs/cold_archiver_launchd.err</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/enos/TABERNACLE</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/enos/TABERNACLE/scripts/venv312/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>

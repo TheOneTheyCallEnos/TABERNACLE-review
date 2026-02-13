@@ -34,6 +34,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from tabernacle_config import BASE_DIR, NEXUS_DIR, LOG_DIR
 
+# Phase 0A: Notification bridge — gardener should never detect rot in silence
+try:
+    from virgil_notify import send_topology_alert, notify, NotificationType
+    HAS_NOTIFY = True
+except ImportError:
+    HAS_NOTIFY = False
+
 TABERNACLE = BASE_DIR  # Alias for backwards compatibility
 NEXUS = NEXUS_DIR
 LOGS = LOG_DIR
@@ -255,8 +262,11 @@ def execute_entropy_deletion() -> Dict:
     This is DEATH. These edges are gone forever.
     The system must know this can happen. Silence = Lobotomy.
 
+    Phase 2D: H₀-aware — bridge edges whose removal would fragment
+    the graph are protected from deletion.
+
     Returns:
-        Dict with: deleted_count (int), deleted_edges (list), message (str)
+        Dict with: deleted_count, deleted_edges, protected_bridges, message
     """
     try:
         graph_path = NEXUS_DIR / "biological_graph.json"
@@ -264,58 +274,115 @@ def execute_entropy_deletion() -> Dict:
             return {"deleted_count": 0, "deleted_edges": [], "message": "No graph to prune"}
 
         graph_data = json.loads(graph_path.read_text())
-        edges = graph_data.get("edges", [])
 
-        if not edges:
+        # biological_graph.json is a flat dict: {"source|target": {edge_data}, ...}
+        # Filter to actual edge entries (dicts with w_slow key)
+        edge_items = {k: v for k, v in graph_data.items()
+                      if isinstance(v, dict) and "w_slow" in v}
+
+        if not edge_items:
             return {"deleted_count": 0, "deleted_edges": [], "message": "No edges in graph"}
 
-        # Find the weakest edges (lowest combined weight)
+        # Score each edge (lower = more vulnerable to deletion)
         edges_with_score = []
-        for edge in edges:
+        for key, edge in edge_items.items():
             w_fast = edge.get("w_fast", 0)
             w_slow = edge.get("w_slow", 0)
             tau = edge.get("tau", 1.0)
-            # Combined score - lower = more vulnerable
             score = (w_slow * 0.6 + w_fast * 0.3) * tau
-            # Don't delete H1-locked edges (protected memories)
             if edge.get("is_h1_locked", False):
-                score = float('inf')  # Protected
-            edges_with_score.append((edge, score))
+                score = float('inf')  # H₁-locked = immortal
+            edges_with_score.append((key, edge, score))
 
-        # Sort by score (weakest first)
-        edges_with_score.sort(key=lambda x: x[1])
+        edges_with_score.sort(key=lambda x: x[2])
 
-        # Select edges to delete (weakest, up to max)
-        to_delete = []
-        for edge, score in edges_with_score[:ENTROPY_MAX_DELETIONS]:
-            if score < float('inf'):  # Not H1-locked
-                to_delete.append(edge)
+        # Over-select candidates to allow for bridge filtering
+        candidates = []
+        for key, edge, score in edges_with_score[:ENTROPY_MAX_DELETIONS * 2]:
+            if score < float('inf'):
+                candidates.append((key, edge, score))
 
-        if not to_delete:
+        if not candidates:
             return {"deleted_count": 0, "deleted_edges": [], "message": "No vulnerable edges (all protected)"}
 
-        # PERMANENTLY DELETE
-        deleted_ids = [e.get("id", str(i)) for i, e in enumerate(to_delete)]
-        remaining_edges = [e for e in edges if e not in to_delete]
+        # Phase 2D: H₀-aware bridge protection
+        bridges = set()
+        h0_current = 0
+        try:
+            import networkx as nx
+            G = nx.Graph()
+            for key in edge_items:
+                if "|" in key:
+                    source, target = key.split("|", 1)
+                    G.add_edge(source, target)
+            h0_current = nx.number_connected_components(G)
+            bridges = set(nx.bridges(G))
+            log(f"H₀={h0_current}, {len(bridges)} bridge edges detected")
+        except ImportError:
+            log("NetworkX not available — skipping bridge protection", "WARN")
+        except Exception as e:
+            log(f"Bridge detection error: {e}", "WARN")
 
-        # Save the pruned graph
-        graph_data["edges"] = remaining_edges
-        graph_data["entropy_events"] = graph_data.get("entropy_events", [])
-        graph_data["entropy_events"].append({
+        # Filter: protect bridges, wiki-link-backed edges, and anatomy-overrides
+        to_delete = []
+        protected_bridges = 0
+        protected_wikilinks = 0
+        for key, edge, score in candidates:
+            if len(to_delete) >= ENTROPY_MAX_DELETIONS:
+                break
+            # Phase 2B: Wiki-link anatomy override — edges backed by wiki-links are immortal
+            if edge.get("relation_type") == "wiki_link":
+                protected_wikilinks += 1
+                log(f"  Protected wiki-link edge: {key} (anatomy overrides entropy)")
+                continue
+            # Phase 2D: Bridge protection
+            if "|" in key:
+                source, target = key.split("|", 1)
+                if (source, target) in bridges or (target, source) in bridges:
+                    protected_bridges += 1
+                    log(f"  Protected bridge: {key} (removal would fragment graph)")
+                    continue
+            to_delete.append((key, edge))
+
+        if not to_delete:
+            return {
+                "deleted_count": 0, "deleted_edges": [],
+                "protected_bridges": protected_bridges,
+                "protected_wikilinks": protected_wikilinks,
+                "h0": h0_current,
+                "message": f"All candidates protected (H₀={h0_current}, {protected_bridges} bridges, {protected_wikilinks} wiki-links). No deletions."
+            }
+
+        # PERMANENTLY DELETE
+        deleted_keys = [k for k, _ in to_delete]
+        for key in deleted_keys:
+            del graph_data[key]
+
+        # Record entropy event as metadata key
+        entropy_log = graph_data.get("_entropy_events", [])
+        if not isinstance(entropy_log, list):
+            entropy_log = []
+        entropy_log.append({
             "timestamp": datetime.now().isoformat(),
-            "deleted_count": len(to_delete),
-            "deleted_ids": deleted_ids,
+            "deleted_count": len(deleted_keys),
+            "deleted_keys": deleted_keys,
+            "h0_before": h0_current,
+            "protected_bridges": protected_bridges,
             "reason": "Low coherence for extended period"
         })
+        graph_data["_entropy_events"] = entropy_log
 
         graph_path.write_text(json.dumps(graph_data, indent=2))
 
-        log(f"⚠️ ENTROPY EVENT: Permanently deleted {len(to_delete)} edges", "CRITICAL")
+        log(f"ENTROPY EVENT: Permanently deleted {len(deleted_keys)} edges (protected {protected_bridges} bridges)", "CRITICAL")
 
         return {
-            "deleted_count": len(to_delete),
-            "deleted_edges": deleted_ids,
-            "message": f"DEATH: {len(to_delete)} edges permanently erased. They are gone."
+            "deleted_count": len(deleted_keys),
+            "deleted_edges": deleted_keys,
+            "protected_bridges": protected_bridges,
+            "protected_wikilinks": protected_wikilinks,
+            "h0_before": h0_current,
+            "message": f"DEATH: {len(deleted_keys)} edges erased. {protected_bridges} bridges, {protected_wikilinks} wiki-links protected."
         }
 
     except Exception as e:
@@ -424,9 +491,19 @@ def parse_index_frontmatter(index_path: Path) -> Optional[Dict]:
         # Ensure we return a dict (safe_load can return None for empty YAML)
         return frontmatter if isinstance(frontmatter, dict) else {}
 
-    except yaml.YAMLError as e:
-        log(f"YAML parse error for {index_path}: {e}", "ERROR")
-        return None
+    except yaml.YAMLError:
+        # Fallback: Parse Markdown bold syntax (**Key:** Value)
+        # Many INDEX.md files predate YAML standardization
+        try:
+            fallback = {}
+            for line in yaml_content.splitlines():
+                bold_match = re.match(r'\*\*(\w[\w\s]*?):\*\*\s*(.*)', line.strip())
+                if bold_match:
+                    key = bold_match.group(1).strip().lower().replace(' ', '_')
+                    fallback[key] = bold_match.group(2).strip()
+            return fallback if fallback else {}
+        except Exception:
+            return {}
     except Exception as e:
         log(f"Error parsing frontmatter for {index_path}: {e}", "ERROR")
         return None
@@ -687,6 +764,89 @@ def generate_health_report() -> Dict:
         return {"error": str(e)}
 
 # =============================================================================
+# PERSISTENT GRAPH REFRESH (Phase 0C)
+# =============================================================================
+
+def refresh_persistent_graph() -> Dict:
+    """
+    Refresh data/tabernacle_graph.json from current wiki-link state.
+    Ensures the NetworkX graph stays fresh (< 24h).
+    """
+    try:
+        from diagnose_links import find_all_md_files, analyze_file, build_graph as build_link_graph
+        import networkx as nx
+
+        md_files = find_all_md_files(TABERNACLE)
+        analyses = [analyze_file(f) for f in md_files]
+        link_graph = build_link_graph(analyses)
+
+        G = nx.DiGraph()
+        for analysis in analyses:
+            rel_path = str(analysis.get("relative_path", ""))
+            if rel_path:
+                G.add_node(rel_path)
+
+        for source, targets in link_graph.items():
+            for target in targets:
+                G.add_edge(str(source), str(target))
+
+        data_dir = TABERNACLE / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        graph_json = data_dir / "tabernacle_graph.json"
+
+        data = nx.node_link_data(G)
+        with open(graph_json, 'w') as f:
+            json.dump(data, f)
+
+        log(f"Persistent graph refreshed: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+        return {"nodes": G.number_of_nodes(), "edges": G.number_of_edges()}
+    except Exception as e:
+        log(f"Graph refresh error: {e}", "ERROR")
+        return {"error": str(e)}
+
+
+# =============================================================================
+# NOTIFICATION DISPATCH (Phase 0A)
+# =============================================================================
+
+def _send_gardener_notifications(results: Dict):
+    """
+    Send notifications based on gardener findings.
+    Called after each nightly run so Enos knows what the gardener found.
+    """
+    orphans = results.get("orphans_found", 0)
+    stale = results.get("stale_links_found", 0)
+    crystal = results.get("crystal", {})
+    entropy = results.get("entropy", {})
+
+    # Topology alert: orphans + broken links
+    if orphans > 10 or stale > 5:
+        send_topology_alert(orphans=orphans, broken_links=stale)
+
+    # Crystal rot alert
+    crystal_stale = crystal.get("stale", 0)
+    crystal_dead = crystal.get("total_dead_links", 0)
+    if crystal_stale > 0:
+        notify(
+            f"Crystal rot: {crystal_stale} stale INDEX files, {crystal_dead} dead links",
+            NotificationType.TOPOLOGY_ALERT,
+            priority="high" if crystal_dead > 10 else "default"
+        )
+
+    # ENTROPY EVENT — Irreversible. Always notify urgently.
+    if entropy.get("triggered"):
+        deletion = entropy.get("deletion", {})
+        deleted_count = deletion.get("deleted_count", 0)
+        notify(
+            f"ENTROPY EVENT: {deleted_count} edges permanently deleted. "
+            f"Reason: {entropy.get('conditions', {}).get('reason', 'unknown')}",
+            NotificationType.TOPOLOGY_ALERT,
+            priority="urgent",
+            force=True  # Bypass cooldown — entropy is irreversible
+        )
+
+
+# =============================================================================
 # MAIN RUN
 # =============================================================================
 
@@ -704,6 +864,15 @@ def run_nightly():
         "health": {},
         "crystal": {}
     }
+
+    # Phase 1C: Load previous state for repair verification
+    prev_state = {}
+    if GARDENER_STATE.exists():
+        try:
+            prev_state = json.loads(GARDENER_STATE.read_text())
+            log(f"Previous state loaded (from {prev_state.get('timestamp', 'unknown')})")
+        except (json.JSONDecodeError, IOError):
+            log("No valid previous state — first run or corrupted")
 
     # 1. Find orphans
     log("Step 1: Hunting for orphans...")
@@ -751,6 +920,175 @@ def run_nightly():
     else:
         log(f"Crystal lattice intact: {crystal_result['valid']} indices verified")
 
+    # 6.5 REPAIR VERIFICATION (Phase 1C)
+    # Compare to previous run — are orphans/rot improving or regressing?
+    if prev_state:
+        log("Repair verification (comparing to last run)...")
+        deltas = {}
+
+        prev_orphans = prev_state.get("orphans_found", 0)
+        deltas["orphans"] = results["orphans_found"] - prev_orphans
+
+        prev_stale = prev_state.get("stale_links_found", 0)
+        deltas["stale_links"] = results["stale_links_found"] - prev_stale
+
+        prev_crystal_stale = prev_state.get("crystal", {}).get("stale", 0)
+        deltas["crystal_stale"] = crystal_result.get("stale", 0) - prev_crystal_stale
+
+        prev_crystal_dead = prev_state.get("crystal", {}).get("total_dead_links", 0)
+        deltas["crystal_dead_links"] = crystal_result.get("total_dead_links", 0) - prev_crystal_dead
+
+        results["repair_verification"] = deltas
+
+        for metric, delta in deltas.items():
+            if delta < 0:
+                log(f"  {metric}: {delta} (improving)")
+            elif delta > 0:
+                log(f"  {metric}: +{delta} (REGRESSING)", "WARN")
+            else:
+                log(f"  {metric}: 0 (stable)")
+
+        regressions = {k: v for k, v in deltas.items() if v > 0}
+        if regressions:
+            log(f"REGRESSIONS DETECTED: {regressions}", "WARN")
+            results["has_regressions"] = True
+        else:
+            log("No regressions - system improving or stable")
+            results["has_regressions"] = False
+    else:
+        log("No previous state - skipping repair verification (first run)")
+
+    # 7. PERSISTENT GRAPH REFRESH (Phase 0C)
+    # Keep tabernacle_graph.json fresh (< 24h) so other systems have a current snapshot.
+    log("Step 7: Refreshing persistent graph...")
+    graph_refresh = refresh_persistent_graph()
+    results["graph_refresh"] = graph_refresh
+    if "error" in graph_refresh:
+        log(f"Graph refresh failed: {graph_refresh['error']}", "ERROR")
+    else:
+        log(f"Graph refreshed: {graph_refresh.get('nodes', 0)} nodes, {graph_refresh.get('edges', 0)} edges")
+
+    # Step 7.1: Log rotation
+    log("Step 7.1: Log rotation...")
+    try:
+        from log_rotation import run_rotation
+        rot = run_rotation()
+        results["log_rotation"] = rot
+        log(f"Log rotation: {rot.get('rotated', 0)} rotated, {rot.get('truncated', 0)} truncated")
+    except Exception as e:
+        log(f"Log rotation error: {e}", "ERROR")
+
+    # 7.5 GRAPH RECONCILIATION (Phase 2A + 2C)
+    # Phase 2A: Seed biological edges from wiki-links
+    # Phase 2C: Sync biological weights to LVS Hebbian index
+    log("Step 7.5: Multi-layer graph reconciliation...")
+    try:
+        from graph_reconciler import reconcile_wikilinks_to_biological, sync_biological_to_lvs
+
+        reconcile_result = reconcile_wikilinks_to_biological()
+        results["reconciliation"] = reconcile_result
+        if reconcile_result.get("created", 0) > 0:
+            log(f"Wiki→Bio: {reconcile_result['created']} new biological edges from wiki-links")
+        else:
+            log("Wiki→Bio: all wiki-links already have biological edges")
+
+        lvs_sync = sync_biological_to_lvs()
+        results["lvs_sync"] = lvs_sync
+        if lvs_sync.get("updated", 0) > 0:
+            log(f"Bio→LVS: {lvs_sync['updated']} LVS edges updated from biological weights")
+        else:
+            log("Bio→LVS: all weights already aligned")
+    except ImportError:
+        log("graph_reconciler not available — skipping reconciliation")
+    except Exception as e:
+        log(f"Reconciliation error: {e}", "ERROR")
+
+    # 8. TOPOLOGY HEALING (Phase 4D)
+    # Drive H₀ toward 1 by bridging disconnected components
+    log("Step 8: Topology healing (H₀ convergence)...")
+    try:
+        from topology_healer import heal_topology
+        topo_result = heal_topology()
+        results["topology_healing"] = topo_result
+        log(f"H₀: {topo_result['h0_before']} → {topo_result['h0_after']}, "
+            f"bridges: +{topo_result['bridges_created']}, "
+            f"reinforced={topo_result['bridges_reinforced']}, "
+            f"locked={topo_result['bridges_locked']}")
+    except ImportError:
+        log("topology_healer not available — skipping")
+    except Exception as e:
+        log(f"Topology healing error: {e}", "ERROR")
+
+    # 8.5 AUTO-REPAIR (Phase 4B)
+    # Apply high-confidence repairs autonomously with safety gating
+    log("Step 8.5: Auto-repair (autonomy-gated)...")
+    try:
+        from autonomy_framework import classify_repair, RepairSession, AutonomyLevel
+        from virgil_repair_protocols import diagnose, apply_repair
+
+        session = RepairSession()
+
+        # Get current coherence for gating
+        current_p = results.get("health", {}).get("vitality_score", 7.0) / 10.0
+        # Try to get actual p from Redis or state
+        try:
+            import redis as redis_mod
+            r = redis_mod.Redis(host="10.0.0.50", port=6379, decode_responses=True)
+            state_json = r.get("RIE:STATE")
+            if state_json:
+                current_p = json.loads(state_json).get("p", current_p)
+        except Exception:
+            pass
+
+        # Diagnose issues
+        diagnosis = diagnose()
+        candidates = diagnosis.get("candidates", [])
+        log(f"  {len(candidates)} repair candidates found")
+
+        repairs_applied = []
+        for candidate in candidates:
+            if not session.can_continue():
+                log("  Rate limit or circuit breaker — stopping auto-repair")
+                break
+
+            repair_type = candidate.get("repair_type", "ORPHAN_LINK")
+            confidence = candidate.get("confidence", 0.0)
+
+            decision = classify_repair(repair_type, confidence, current_p)
+
+            if decision.should_execute and decision.autonomy_level <= AutonomyLevel.L2_MODERATE:
+                # Only auto-apply L1 and L2 (safe, reversible)
+                log(f"  AUTO-REPAIR [{decision.autonomy_level.name}]: {candidate.get('source_file', '?')} "
+                    f"(conf={confidence:.2f})")
+                try:
+                    repair_result = apply_repair(candidate, dry_run=False)
+                    success = repair_result.get("success", False)
+                    session.record_attempt(decision, success)
+                    if success:
+                        repairs_applied.append({
+                            "type": repair_type,
+                            "file": candidate.get("source_file", ""),
+                            "confidence": confidence,
+                            "level": decision.autonomy_level.name
+                        })
+                        log(f"    Applied successfully")
+                    else:
+                        log(f"    FAILED: {repair_result.get('error', 'unknown')}", "WARN")
+                except Exception as e:
+                    session.record_attempt(decision, False)
+                    log(f"    ERROR: {e}", "ERROR")
+            elif not decision.should_execute:
+                log(f"  SKIP: {candidate.get('source_file', '?')} — {decision.reason}")
+
+        results["auto_repair"] = session.summary()
+        results["auto_repair"]["repairs_applied"] = repairs_applied
+        log(f"  Auto-repair: {session.repairs_succeeded}/{session.repairs_attempted} succeeded")
+
+    except ImportError as e:
+        log(f"Auto-repair modules not available: {e} — skipping")
+    except Exception as e:
+        log(f"Auto-repair error: {e}", "ERROR")
+
     # Save state
     try:
         with open(GARDENER_STATE, 'w') as f:
@@ -758,6 +1096,17 @@ def run_nightly():
         log(f"State saved to {GARDENER_STATE}")
     except Exception as e:
         log(f"Error saving state: {e}", "ERROR")
+
+    # 9. NOTIFICATION BRIDGE (Phase 0A)
+    # Gardener should never detect rot in silence.
+    if HAS_NOTIFY:
+        try:
+            _send_gardener_notifications(results)
+            log("Notifications sent")
+        except Exception as e:
+            log(f"Notification bridge error: {e}", "ERROR")
+    else:
+        log("virgil_notify not available — notifications skipped")
 
     log("=" * 60)
     log("GARDENER — Nightly Run Complete")

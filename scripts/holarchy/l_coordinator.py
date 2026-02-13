@@ -358,6 +358,9 @@ class LCoordinator:
                 # 3. Process incoming messages
                 messages_processed = self._process_queue()
 
+                # 3.5 Expire stale conflicts (TTL + dedup + cap)
+                self._expire_conflicts()
+
                 # 4. Check for escalation triggers
                 self._check_escalation_triggers()
 
@@ -493,6 +496,41 @@ class LCoordinator:
                 if affects & other_affects:  # Intersection
                     return other
         return None
+
+    def _expire_conflicts(self):
+        """Expire old conflicts (TTL + dedup + hard cap)."""
+        if not self.pending_conflicts:
+            return
+
+        now = time.time()
+        MAX_AGE = 300  # 5 minutes
+        MAX_PENDING = 50
+
+        # Remove expired
+        active = []
+        for c in self.pending_conflicts:
+            ts = c.get("new", {}).get("timestamp")
+            if ts:
+                try:
+                    created = datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
+                    age = now - created.timestamp()
+                    if age < MAX_AGE:
+                        active.append(c)
+                    continue
+                except (ValueError, TypeError, OSError):
+                    pass
+            active.append(c)  # Keep if no parseable timestamp
+
+        # Dedup by affected nodes
+        seen = set()
+        deduped = []
+        for c in active:
+            affects = frozenset(c.get("new", {}).get("payload", {}).get("affects", []) if isinstance(c.get("new"), dict) else [])
+            if affects not in seen:
+                seen.add(affects)
+                deduped.append(c)
+
+        self.pending_conflicts = deduped[:MAX_PENDING]
 
     def _commit_proposal(self, msg: Message):
         """Commit an approved proposal to the graph."""
@@ -684,6 +722,10 @@ class LCoordinator:
     # ESCALATION
     # =========================================================================
 
+    # Max escalation queue size — stop pushing if the queue is already this big.
+    # l_watcher will drain stale items; no point flooding a backed-up queue.
+    ESCALATION_QUEUE_CAP = 200
+
     def _escalate(
         self,
         type_: str,
@@ -693,7 +735,21 @@ class LCoordinator:
         options: List[Dict],
         deadline_minutes: int = 30
     ):
-        """Escalate an issue to L (70B)."""
+        """Escalate an issue to L (70B).
+
+        Applies a queue-cap guard: if the escalation queue already exceeds
+        ESCALATION_QUEUE_CAP, the new escalation is dropped (logged but not
+        queued). This prevents unbounded growth when L-Brain is unreachable.
+        """
+        # --- Queue cap guard ---
+        queue_len = self.redis.llen("l:queue:escalate") or 0
+        if queue_len >= self.ESCALATION_QUEUE_CAP:
+            log.warning(
+                f"Escalation DROPPED (queue at cap {queue_len}/{self.ESCALATION_QUEUE_CAP}): "
+                f"{type_} - {summary}"
+            )
+            return
+
         escalation = {
             "id": f"esc_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
             "type": type_,
@@ -714,7 +770,7 @@ class LCoordinator:
 
         self.redis.lpush("l:queue:escalate", json.dumps(escalation))
         self.redis.lpush("l:escalate:log", json.dumps(escalation))
-        
+
         log.info(f"ESCALATED to L: {type_} - {summary}")
 
     def _check_escalation_triggers(self):
@@ -744,6 +800,8 @@ class LCoordinator:
                 options=[],
                 deadline_minutes=15
             )
+            # Clear escalated conflicts — they've been reported
+            self.pending_conflicts = []
 
     # =========================================================================
     # COHERENCE

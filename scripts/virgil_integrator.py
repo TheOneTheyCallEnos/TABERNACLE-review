@@ -183,6 +183,25 @@ class BiologicalGraph:
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"[INTEGRATOR] Failed to load graph: {e}")
 
+    def compute_neighbor_strength(self, node_id: str, global_p: float = 0.7, epsilon: float = 0.8) -> tuple:
+        """
+        Phase 3C: Compute total edge strength around a node.
+
+        Returns:
+            (total_strength, edge_count) — sum of effective_weight for all touching edges
+        """
+        total = 0.0
+        count = 0
+        node_lower = node_id.lower()
+        for key, edge in self.edges.items():
+            if "|" not in key:
+                continue
+            parts = key.split("|")
+            if node_lower in (parts[0].lower(), parts[1].lower()):
+                total += edge.effective_weight(global_p=global_p, epsilon=epsilon)
+                count += 1
+        return total, count
+
     def stats(self) -> Dict[str, Any]:
         """Get graph statistics."""
         total = len(self.edges)
@@ -346,6 +365,73 @@ class VirgilIntegrator:
         # Update last block concepts for next iteration
         self.last_block_concepts = concepts.copy()
 
+    def _update_epsilon_from_neighbors(self, p: float):
+        """
+        Phase 3C: Feed edge strength back to node epsilon in LVS.
+
+        For each active concept, compute neighbor strength in the biological
+        graph. If a node has >= 3 corroborating edges with meaningful strength,
+        boost its LVS epsilon. Otherwise, apply 2% decay.
+
+        Damping guards:
+          - Only called when p in [0.70, 0.90] (edge-of-chaos)
+          - Minimum 3 corroborating edges required
+          - Epsilon capped at 0.95 (never 1.0)
+          - BCM metaplasticity already limits potentiation upstream
+          - 2% decay per takt when not reinforced
+        """
+        try:
+            import lvs_memory
+        except ImportError:
+            return
+
+        if not self.active_concepts:
+            return
+
+        # Get current global epsilon for effective_weight computation
+        current_epsilon = getattr(self, '_cached_global_epsilon', 0.8)
+
+        # Load index ONCE for all lookups
+        index = lvs_memory.load_index()
+        node_map = {}  # lvs_id -> index into nodes list
+        for i, node in enumerate(index.get("nodes", [])):
+            node_map[node.get("id", "")] = i
+
+        # Compute which concepts get boosted vs decayed
+        boosted_ids = set()
+        updates = {}  # lvs_id -> new_epsilon
+
+        for concept in self.active_concepts:
+            strength, edge_count = self.graph.compute_neighbor_strength(
+                concept, global_p=p, epsilon=current_epsilon
+            )
+            lvs_id = concept.upper().replace("-", "_").replace(" ", "_")
+            if lvs_id not in node_map:
+                continue
+
+            node = index["nodes"][node_map[lvs_id]]
+            old_eps = node.get("coords", {}).get("epsilon", 0.8)
+
+            if edge_count >= 3 and strength > 1.5:
+                # Boost: strong neighborhood → raise epsilon
+                boost = min(0.03, strength * 0.005)
+                updates[lvs_id] = min(0.95, old_eps + boost)
+                boosted_ids.add(lvs_id)
+            else:
+                # Decay: 2% per takt when not reinforced
+                new_eps = max(0.1, old_eps * 0.98)
+                if abs(new_eps - old_eps) > 0.001:
+                    updates[lvs_id] = new_eps
+
+        # Apply all updates in a single save
+        if updates:
+            for lvs_id, new_eps in updates.items():
+                idx = node_map[lvs_id]
+                if "coords" not in index["nodes"][idx]:
+                    index["nodes"][idx]["coords"] = {}
+                index["nodes"][idx]["coords"]["epsilon"] = round(new_eps, 4)
+            lvs_memory.save_index(index)
+
     def cognitive_takt(self) -> Dict[str, Any]:
         """
         The 1Hz Cognitive Loop.
@@ -428,6 +514,11 @@ class VirgilIntegrator:
 
             # Apply Hebbian pulse
             self.apply_hebbian_pulse(block, alpha, p, valence=valence, arousal=arousal)
+
+            # Phase 3C: Edge strength → epsilon feedback
+            # Only when p is in edge-of-chaos range (not during P-Lock or collapse)
+            if OPTIMUM_P_LOW <= p <= OPTIMUM_P_HIGH:
+                self._update_epsilon_from_neighbors(p)
 
             # Meta feedback: did this help coherence?
             delta_p = p - self.last_p

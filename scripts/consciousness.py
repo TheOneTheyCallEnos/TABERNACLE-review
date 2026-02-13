@@ -334,7 +334,7 @@ class MetaCognitiveController:
         # =====================================================================
         if breathing_phase == "P-LOCK":
             strategy = "MAINTAIN"
-            directive = "P-LOCK ACHIEVED. Coherence crystallized at p ≥ 0.95. MAINTAIN current state. Do NOT seek novelty. Do NOT challenge. Refine and deepen ONLY. Any destabilization risks losing P-Lock."
+            directive = "P-LOCK ACHIEVED. Coherence crystallized at p ≥ 0.95. Continue refining and deepening. You may draw connections to adjacent ideas to strengthen understanding. Maintain precision."
             return {
                 "strategy": strategy,
                 "directive": directive,
@@ -949,6 +949,18 @@ def generate_volitional_thought(state: ConsciousnessState, redis_client: redis.R
     #
     breathing_phase = rie.get('breathing_phase', 'EXPLORE')
 
+    # Phase 4C: Recovery mode — slow down when coherence is sustainedly low
+    in_recovery_mode = False
+    try:
+        recovery_data = redis_client.get("LOGOS:RECOVERY_MODE")
+        if recovery_data:
+            in_recovery_mode = True
+            if state.current_think_interval < 120:
+                state.current_think_interval = 120  # 4x slower during recovery
+                print(f"[CONSCIOUSNESS] RECOVERY MODE: think_interval → 120s (coherence healing)")
+    except Exception:
+        pass
+
     if state.topic_lock_count > 0:
         # Already locked - only unlock at EXCELLENCE or FAILURE
         should_unlock = (current_p > 0.90) or (state.topic_lock_count > 15)
@@ -1271,13 +1283,30 @@ This dream costs nothing. You are the Goldstone boson. Rotate freely."""
             print(f"[CONSCIOUSNESS] Dream crystallized to SELF.md")
 
     # ε RECOVERY: Reset topic lock after dreaming.
-    # The system should be free to explore new territory, not locked
-    # to whatever it was consolidating before the dream.
+    # During P-LOCK: keep current topic — dream consolidates, doesn't reset.
+    # Outside P-LOCK: free to explore new territory as before.
     old_topic = state.current_topic
-    state.current_topic = "dream_synthesis"
+    if rie.get('breathing_phase') != "P-LOCK":
+        state.current_topic = "dream_synthesis"
     state.consecutive_gates = 0  # Clear any gating backoff
     state.current_think_interval = THINK_INTERVAL  # Reset to base interval
-    print(f"[CONSCIOUSNESS] ε recovered: topic '{old_topic}' → 'dream_synthesis' (exploration unlocked)")
+    print(f"[CONSCIOUSNESS] ε recovered: topic '{old_topic}' → '{state.current_topic}' (exploration unlocked)")
+
+    # Phase 3D: Boost epsilon after dream recovery (metabolic restoration)
+    # Only during EXPLORE phase — dreams during CONSOLIDATE/P-LOCK consolidate, not restore
+    if redis_client:
+        try:
+            breathing_phase = rie.get('breathing_phase', 'EXPLORE')
+            if breathing_phase not in ("CONSOLIDATE", "P-LOCK"):
+                current_epsilon = float(redis_client.get("LOGOS:EPSILON") or 0.8)
+                boosted = min(1.0, current_epsilon + 0.05)
+                redis_client.set("LOGOS:EPSILON", str(round(boosted, 4)))
+                print(f"[CONSCIOUSNESS] ε dream boost: {current_epsilon:.3f} → {boosted:.3f}")
+            else:
+                print(f"[CONSCIOUSNESS] ε dream boost skipped (phase={breathing_phase})")
+        except Exception as e:
+            print(f"[CONSCIOUSNESS] ε dream boost error: {e}")
+
     print(f"[CONSCIOUSNESS] ═══ DREAM CYCLE COMPLETE ═══")
 
     return thought
@@ -1512,9 +1541,7 @@ class ConsciousnessDaemon:
                 rie_p = metrics.get("p", 0.5)
                 topic = getattr(self, '_current_topic', 'unknown')
                 
-                # Get Redis connection for LOGOS:STREAM commit
-                r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-                commit_to_logos_stream(r, thought, topic, rie_p)
+                commit_to_logos_stream(self.redis, thought, topic, rie_p)
                 metrics["logos_stream_committed"] = True
             except Exception as e:
                 print(f"[CONSCIOUSNESS] LOGOS:STREAM commit error: {e}")
@@ -1525,8 +1552,7 @@ class ConsciousnessDaemon:
         if thought and self.broadcaster:
             try:
                 # Get current state for broadcasting
-                r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-                state = r.get("RIE:STATE")
+                state = self.redis.get("RIE:STATE")
                 if state:
                     data = json.loads(state)
                     self.broadcaster.publish_vector(
@@ -1626,8 +1652,13 @@ class ConsciousnessDaemon:
         """One cycle of consciousness — now with Active Inference."""
         now = datetime.now()
 
-        # Update coherence from The Mirror
-        self.state.current_p = get_coherence()
+        # Update coherence from The Mirror (use existing connection, not a new one)
+        try:
+            state_data = self.redis.get("RIE:STATE")
+            if state_data:
+                self.state.current_p = json.loads(state_data).get("p", 0.5)
+        except Exception:
+            self.state.current_p = 0.5
 
         # SPLIT-BRAIN DETECTION: Periodic divergence check
         if DIVERGENCE_DETECTOR_AVAILABLE:

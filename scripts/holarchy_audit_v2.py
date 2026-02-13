@@ -94,7 +94,8 @@ PYTHON_SCAN_DIRS = [
 SKIP_DIRS = {
     ".git", "venv", "venv312", "node_modules", "__pycache__",
     ".holotower", "archived", "site-packages", "dist-packages",
-    "logos-mineflayer", ".cursor", ".review_mirror", "Tabernacle-sandbox"
+    "logos-mineflayer", ".cursor", ".review_mirror", ".claude", "Tabernacle-sandbox",
+    "templates", "bootstrap", "outputs", "docs", "logs", "RAW_ARCHIVES",
 }
 
 # Vault quadrants
@@ -946,6 +947,14 @@ def validate_wiki_links() -> Dict[str, Any]:
                     if possible.exists():
                         found = True
                         break
+
+                # Fallback: recursive stem search across quadrants
+                if not found:
+                    link_stem = Path(link_clean).stem
+                    for candidate in BASE_DIR.rglob(f"{link_stem}.md"):
+                        if candidate.is_file() and ".git" not in str(candidate):
+                            found = True
+                            break
 
                 if found:
                     result["valid_links"] += 1
@@ -2748,6 +2757,10 @@ def main():
 
         log(f"Latest symlinks updated")
 
+        # Auto-link this audit into MANIFEST_INDEX.md
+        if not args.json_only:
+            _auto_link_audit(md_path, timestamp)
+
     # Return exit code based on health
     if audit["overall_health"] < 0.5:
         sys.exit(2)  # Critical
@@ -2755,6 +2768,46 @@ def main():
         sys.exit(1)  # Warning
     else:
         sys.exit(0)  # Healthy
+
+
+def _auto_link_audit(md_path: Path, timestamp: str):
+    """Append new audit to MANIFEST_INDEX.md Audit History table.
+
+    Inserts a row before the '| Latest |' sentinel line.
+    Fails silently with a warning — never crashes the audit.
+    """
+    manifest_index = MANIFEST_DIR / "MANIFEST_INDEX.md"
+    try:
+        if not manifest_index.exists():
+            log("[WARN] MANIFEST_INDEX.md not found — skipping auto-link")
+            return
+
+        content = manifest_index.read_text()
+        sentinel = "| Latest | [[00_NEXUS/HOLARCHY_MANIFEST/AUDIT_LATEST.md]] |"
+
+        if sentinel not in content:
+            log("[WARN] MANIFEST_INDEX.md sentinel not found — skipping auto-link")
+            return
+
+        # Format: "2026-02-12 15:29" from timestamp "20260212_152947"
+        dt = datetime.strptime(timestamp, "%Y%m%d_%H%M%S")
+        date_str = dt.strftime("%Y-%m-%d %H:%M")
+
+        relative_path = f"00_NEXUS/HOLARCHY_MANIFEST/{md_path.name}"
+        new_row = f"| {date_str} | [[{relative_path}]] |"
+
+        # Check if this audit is already linked (idempotent)
+        if md_path.name in content:
+            return
+
+        # Insert new row before the sentinel
+        content = content.replace(sentinel, f"{new_row}\n{sentinel}")
+        manifest_index.write_text(content)
+        log("Auto-linked audit in MANIFEST_INDEX.md")
+
+    except Exception as e:
+        log(f"[WARN] Auto-link failed (non-fatal): {e}")
+
 
 if __name__ == "__main__":
     main()

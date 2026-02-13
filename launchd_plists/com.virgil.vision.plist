@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.virgil.vision</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/enos/TABERNACLE/scripts/venv312/bin/python3</string>
+        <string>/Users/enos/TABERNACLE/scripts/visual_cortex.py</string>
+        <string>run</string>
+        <string>60</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/enos/TABERNACLE/scripts</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/enos/TABERNACLE/logs/vision.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/enos/TABERNACLE/logs/vision.err</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/enos/TABERNACLE/scripts/venv312/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>TABERNACLE</key>
+        <string>/Users/enos/TABERNACLE</string>
+    </dict>
+</dict>
+</plist>

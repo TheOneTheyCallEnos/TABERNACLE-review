@@ -29,6 +29,12 @@ DEVICE = 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 from tabernacle_config import NEXUS_DIR
 
+# Suppress CLIP position_ids warnings (fill vision.err with 1GB+ of noise)
+import warnings
+warnings.filterwarnings("ignore", message=".*position_ids.*")
+import logging
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+
 # State persistence
 VISUAL_STATE_PATH = NEXUS_DIR / "visual_cortex_state.json"
 VISUAL_LOG_PATH = Path("/Users/enos/TABERNACLE/logs/visual_cortex.log")

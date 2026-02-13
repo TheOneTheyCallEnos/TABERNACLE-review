@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/Users/enos/TABERNACLE/scripts/venv312/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+	</dict>
+	<key>KeepAlive</key>
+	<false/>
+	<key>Label</key>
+	<string>com.tabernacle.synapse</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/enos/TABERNACLE/scripts/venv312/bin/python3</string>
+		<string>/Users/enos/TABERNACLE/scripts/synapse.py</string>
+		<string>serve</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/enos/TABERNACLE/logs/synapse.err</string>
+	<key>StandardOutPath</key>
+	<string>/Users/enos/TABERNACLE/logs/synapse.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/enos/TABERNACLE/scripts</string>
+</dict>
+</plist>

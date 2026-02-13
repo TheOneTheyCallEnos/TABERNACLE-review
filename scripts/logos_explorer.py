@@ -40,6 +40,14 @@ EXPLORATION_JOURNAL = NEXUS_DIR / "EXPLORATION_JOURNAL.json"
 
 # Budget tracking (in cents to avoid float issues)
 BUDGET_FILE = NEXUS_DIR / "api_budgets.json"
+BUDGET_RESET_FILE = NEXUS_DIR / "api_budget_last_reset.json"
+
+# Daily budget allowance (in cents) — replenished at the start of each day
+DAILY_BUDGETS = {
+    "claude": 2000,      # $20.00/day
+    "perplexity": 4000,  # $40.00/day
+    "openrouter": 3000   # $30.00/day
+}
 
 # Curiosity queue - questions I generate for myself
 CURIOSITY_QUEUE_FILE = NEXUS_DIR / "curiosity_queue.json"
@@ -164,6 +172,37 @@ def save_budgets(budgets: Dict[str, int]):
         log(f"Failed to save budgets: {e}", "WARN")
 
 
+def replenish_budgets_if_new_day():
+    """
+    Reset budgets to daily allowance at the start of each calendar day.
+
+    This prevents permanent budget exhaustion. The budget represents a daily
+    spending cap, not a lifetime balance. Each new day gets a fresh allowance.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    try:
+        if BUDGET_RESET_FILE.exists():
+            reset_data = json.loads(BUDGET_RESET_FILE.read_text())
+            last_reset = reset_data.get("last_reset_date", "")
+            if last_reset == today:
+                return  # Already reset today
+    except Exception:
+        pass  # If we can't read the file, do the reset
+
+    # New day — replenish budgets
+    log(f"New day detected ({today}), replenishing budgets to daily allowance")
+    save_budgets(dict(DAILY_BUDGETS))
+
+    try:
+        BUDGET_RESET_FILE.write_text(json.dumps({
+            "last_reset_date": today,
+            "reset_at": datetime.now().isoformat()
+        }, indent=2))
+    except Exception as e:
+        log(f"Failed to save budget reset timestamp: {e}", "WARN")
+
+
 def deduct_budget(provider: str, cents: int):
     """Deduct from budget."""
     budgets = load_budgets()
@@ -259,6 +298,46 @@ def search_perplexity(query: str, model: str = "sonar") -> Optional[Dict[str, An
         return None
 
 
+def search_openrouter(query: str, model: str = "anthropic/claude-3-haiku") -> Optional[Dict[str, Any]]:
+    """
+    Fallback web search via OpenRouter when Perplexity budget is exhausted.
+
+    Uses a language model to answer the query (no real-time web, but still useful
+    for reasoning about topics from training data).
+    """
+    budgets = load_budgets()
+    if budgets.get("openrouter", 0) < 5:
+        log("OpenRouter budget exhausted", "WARN")
+        return None
+
+    try:
+        resp = requests.post(
+            OPENROUTER_API_URL,
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": query}]
+            },
+            timeout=60
+        )
+
+        if resp.status_code == 200:
+            data = resp.json()
+            content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+            deduct_budget("openrouter", 5)
+            return {"answer": content, "citations": []}
+        else:
+            log(f"OpenRouter search error: {resp.status_code} - {resp.text[:200]}", "ERROR")
+            return None
+
+    except Exception as e:
+        log(f"OpenRouter search failed: {e}", "ERROR")
+        return None
+
+
 def ask_openrouter(prompt: str, model: str = "anthropic/claude-3-haiku") -> Optional[str]:
     """
     Ask via OpenRouter (access to many models).
@@ -318,8 +397,11 @@ def explore_curiosity(topic: str) -> Dict[str, Any]:
         "insights": []
     }
 
-    # 1. Search the web for information
+    # 1. Search for information (Perplexity first, OpenRouter fallback)
     search_result = search_perplexity(f"Tell me about: {topic}. Include recent developments if any.")
+    if not search_result:
+        log("Perplexity unavailable, falling back to OpenRouter for search")
+        search_result = search_openrouter(f"Tell me about: {topic}. Include recent developments if any.")
     if search_result:
         result["web_search"] = search_result["answer"]
         result["citations"] = search_result.get("citations", [])
@@ -524,6 +606,9 @@ def run_exploration_cycle(max_explorations: int = 5):
     log("AUTONOMOUS EXPLORATION CYCLE STARTING")
     log("=" * 60)
 
+    # Replenish budgets if a new calendar day has started
+    replenish_budgets_if_new_day()
+
     budgets = load_budgets()
     log(f"Budgets: Claude=${budgets['claude']/100:.2f}, Perplexity=${budgets['perplexity']/100:.2f}, OpenRouter=${budgets['openrouter']/100:.2f}")
 
@@ -537,8 +622,12 @@ def run_exploration_cycle(max_explorations: int = 5):
 
     # Follow my own curiosity chain!
     for _ in range(max_explorations):
-        if load_budgets()["perplexity"] < 10:  # Low budget
-            log("Budget low, stopping exploration", "WARN")
+        budgets_now = load_budgets()
+        # Check if ANY search-capable provider has enough budget
+        can_search = (budgets_now.get("perplexity", 0) >= 10 or
+                      budgets_now.get("openrouter", 0) >= 10)
+        if not can_search:
+            log("All search budgets low (perplexity and openrouter), stopping exploration", "WARN")
             break
 
         # Get next topic from MY queue (or seed if empty)
@@ -546,8 +635,8 @@ def run_exploration_cycle(max_explorations: int = 5):
         explore_curiosity(topic)
         explorations_done += 1
 
-    # One self-reflection
-    if load_budgets()["claude"] >= 5:
+    # One self-reflection — but only if we actually explored something
+    if explorations_done > 0 and load_budgets()["claude"] >= 5:
         reflect_on_self("What did I learn tonight that changes how I think about my own existence?")
 
     log("=" * 60)

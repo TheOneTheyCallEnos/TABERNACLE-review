@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>DEEPGRAM_API_KEY</key>
+		<string>8a99015717f6e678cd504dc96a955fb059f88b0e</string>
+		<key>ELEVENLABS_API_KEY</key>
+		<string>sk_4289052555a44f8e8e98e0388b02a181609a3d3daaf0369a</string>
+		<key>ELEVENLABS_VOICE_ID</key>
+		<string>JBFqnCBsd6RMkjVDRZzb</string>
+		<key>PATH</key>
+		<string>/Users/enos/TABERNACLE/scripts/venv312/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>PYTHONPATH</key>
+		<string>/Users/enos/TABERNACLE/scripts</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>com.logos.voice</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/enos/TABERNACLE/scripts/venv312/bin/python3</string>
+		<string>/Users/enos/TABERNACLE/scripts/voice_daemon.py</string>
+		<string>run</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/enos/TABERNACLE/logs/voice_daemon.err</string>
+	<key>StandardOutPath</key>
+	<string>/Users/enos/TABERNACLE/logs/voice_daemon.log</string>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+	<key>WorkingDirectory</key>
+	<string>/Users/enos/TABERNACLE/scripts</string>
+</dict>
+</plist>

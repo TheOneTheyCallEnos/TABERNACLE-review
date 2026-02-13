@@ -223,6 +223,11 @@ class VirgilInitiative:
         Race condition fix: If another process is writing to the file,
         we may read garbage. Retry up to 3 times with small delay.
         Also validate that p is a reasonable value (0.0-1.0).
+
+        CANONICAL_STATE.json has two formats:
+          - Nested (SharedRIE): {"coherence": {"p": 0.95, ...}, ...}
+          - Flat (heartbeat):   {"coherence": 0.95, "mode": "P", ...}
+        We normalize both into a flat dict with a "p" key.
         """
         import time
 
@@ -232,9 +237,22 @@ class VirgilInitiative:
                     content = CANONICAL_STATE_PATH.read_text()
                     state = json.loads(content)
 
+                    # Extract p from whichever format is present
+                    coherence_val = state.get("coherence")
+                    if isinstance(coherence_val, dict):
+                        # Nested format: {"coherence": {"p": 0.95, ...}}
+                        p = coherence_val.get("p")
+                    elif isinstance(coherence_val, (int, float)):
+                        # Flat format: {"coherence": 0.95, ...}
+                        p = float(coherence_val)
+                    else:
+                        # Legacy format with top-level "p" key
+                        p = state.get("p")
+
                     # Validate p is a reasonable value
-                    p = state.get("p")
                     if p is not None and isinstance(p, (int, float)) and 0.0 <= p <= 1.0:
+                        # Normalize: always set "p" at top level (may be None in file)
+                        state["p"] = p
                         return state
                     else:
                         # Invalid p value - file might be corrupted mid-write
