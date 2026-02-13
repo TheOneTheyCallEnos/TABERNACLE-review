@@ -11,7 +11,9 @@ Stop:  LOGOS:STATE = "IDLE"
 """
 
 import os
+import sys
 import time
+import fcntl
 import redis
 import pyaudio
 import wave
@@ -309,5 +311,21 @@ class LogosDaemon:
                 time.sleep(1)
 
 
+LOCK_FILE = "/tmp/logos_daemon.lock"
+PID_FILE = "/tmp/logos_daemon.pid"
+
+def acquire_singleton():
+    """Ensure only one instance runs via flock (atomic, auto-releases on crash)."""
+    lock_fd = open(LOCK_FILE, 'w')
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"Another logos_daemon is already running. Exiting.")
+        sys.exit(0)
+    with open(PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+    return lock_fd  # Must keep reference to prevent GC releasing the lock
+
 if __name__ == "__main__":
+    lock = acquire_singleton()
     LogosDaemon().run()

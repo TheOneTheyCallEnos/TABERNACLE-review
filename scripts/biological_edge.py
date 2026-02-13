@@ -58,6 +58,10 @@ BCM_TARGET_RATE = 0.5       # Target activation rate (c² in the equation)
 P_THRESHOLD_HIGH = 0.7      # Above this: flow state (amplify)
 P_THRESHOLD_LOW = 0.5       # Below this: confusion (dampen)
 
+# Phase 3B: Epsilon (metabolic potential) baseline for decay modulation
+EPSILON_BASELINE = 0.65     # Decay rate neutral point (ε/baseline scales DECAY_SLOW)
+EPSILON_DEFAULT = 0.8       # Default when epsilon unavailable
+
 # Sparsity
 ACTIVATION_THRESHOLD = 0.05  # Don't propagate below this
 
@@ -129,19 +133,21 @@ class BiologicalEdge:
     def effective_weight(
         self,
         t_now: Optional[float] = None,
-        global_p: float = 0.7
+        global_p: float = 0.7,
+        epsilon: float = 0.8
     ) -> float:
         """
         Calculate momentary transmission strength.
 
         Implements:
-        1. Temporal decay (STP)
+        1. Temporal decay (STP), modulated by epsilon (Phase 3B)
         2. Context modulation (Neuromodulation via global_p)
         3. Trust gating (local confidence)
 
         Args:
             t_now: Current timestamp (if None, uses now)
             global_p: Global coherence (acts as neuromodulator)
+            epsilon: Metabolic potential [0.1, 0.95] — modulates decay rate
 
         Returns:
             Effective weight for this transmission
@@ -157,7 +163,12 @@ class BiologicalEdge:
         # Slow component also decays, but much slower (structural memory)
         # This prevents completely unused edges from cluttering the graph
         if not self.is_h1_locked:
-            slow_decay = math.exp(-dt / DECAY_SLOW)
+            # Phase 3B: Epsilon modulates slow decay rate
+            # High ε (active node) → slower decay (up to 1.54x at ε=1.0)
+            # Low ε (dormant node) → faster decay (up to 2x at ε=0.32)
+            # Floor at 0.5 prevents catastrophic collapse
+            effective_decay_slow = DECAY_SLOW * max(0.5, epsilon / 0.65)
+            slow_decay = math.exp(-dt / effective_decay_slow)
         else:
             slow_decay = 1.0  # H₁ locked edges never decay
 

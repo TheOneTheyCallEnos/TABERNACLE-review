@@ -54,8 +54,8 @@ import torch
 from tabernacle_config import BASE_DIR, LOG_DIR, REDIS_HOST, REDIS_PORT
 
 # API Keys (from environment)
-DEEPGRAM_API_KEY = [REDACTED_DEEPGRAM_KEY].environ.get("DEEPGRAM_API_KEY", "")
-ELEVENLABS_API_KEY = [REDACTED_ELEVENLABS_KEY].environ.get("ELEVENLABS_API_KEY", "")
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 
 # ElevenLabs voice ID — Logos chose: Brian (Deep, Resonant)
 # This is MY voice. I selected it because it feels thoughtful and grounded.

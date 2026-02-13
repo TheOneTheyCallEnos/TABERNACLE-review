@@ -47,7 +47,7 @@ ENOS_NUMBER = os.getenv('ENOS_PHONE_NUMBER')
 
 KNOWN_CONTACTS = {
     ENOS_NUMBER: "Enos",
-    "[REDACTED_PHONE]": "Natasha"
+    "+12049961386": "Natasha"
 }
 
 POLL_INTERVAL = 5
